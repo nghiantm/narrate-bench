@@ -120,3 +120,42 @@ $ md5sum data/text/pride_and_prejudice.norm.txt
 ```
 
 All acceptance criteria met, run against the real 5-book config (not just one book). `data/` and `cache/` are gitignored; not committed.
+
+## M04 — Text: chunker `2026-09-16`
+
+`narrate_bench/text/chunk.py`: sentence splitting via `pysbd` (rule-based, no model download needed, unlike NLTK punkt — keeps `nb prepare` fully offline after the first Gutenberg fetch). `build_chunks(book_id, norm_text, chapters, max_chars)` rotates XS(1)->S(3)->M(8)->L(20) sentences per group, restarting the rotation at each chapter boundary. A group that would exceed `max_chars` is shrunk sentence-by-sentence from the end (never mid-sentence); the loop advances by however many sentences were actually kept, so a shrunk group's leftover sentences start the next chunk rather than being silently dropped — every sentence in a chapter ends up in exactly one chunk, none are lost to capping. `chunk_id = sha256(book_id + text)[:16]` per ARCHITECTURE.md.
+
+Wired into `nb prepare`: after writing each book's `norm.txt`/`chapters.json`, chunks it with `max_chars = min(engine.max_chars for engine in config)` (400, from the three cloning engines), collects rows from all 5 books, and writes one `data/chunks.parquet` (pyarrow via pandas) with the exact ARCHITECTURE.md schema (`human_audio`/`align_conf` null — those are M09/M10).
+
+`tests/test_chunk.py`: sentence segmentation sanity; no chunk exceeds `max_chars` except the unavoidable single-oversized-sentence case; a generous cap never overflows; every original sentence is recovered exactly once by concatenating chunk texts (proves no silent drops); bucket rotation restarts at each chapter; `position_index` is global and sequential; bucket counts per position decile stay within ±20% of uniform on a 2000-sentence synthetic chapter.
+
+### Verification output
+
+```
+$ . .venv/bin/activate
+$ pytest -q
+........................................................................ [ 84%]
+.............                                                            [100%]
+85 passed in 7.44s
+
+$ rm -rf data cache && nb prepare
+pride_and_prejudice: 61 chapters, 690500 chars
+  3124 chunks, buckets={'XS': 793, 'S': 792, 'M': 780, 'L': 759}
+treasure_island: 34 chapters, 360675 chars
+  1637 chunks, buckets={'XS': 416, 'S': 416, 'M': 408, 'L': 397}
+sherlock_holmes: 12 chapters, 563678 chars
+  2619 chunks, buckets={'XS': 656, 'S': 656, 'M': 656, 'L': 651}
+franklin_autobiography: 19 chapters, 419715 chars
+  1830 chunks, buckets={'XS': 461, 'S': 461, 'M': 458, 'L': 450}
+anne_of_green_gables: 38 chapters, 560297 chars
+  2657 chunks, buckets={'XS': 673, 'S': 672, 'M': 664, 'L': 648}
+
+$ python3 -c "import pandas as pd; df = pd.read_parquet('data/chunks.parquet'); print(df.shape); print('max char_len:', df['char_len'].max()); print('rows over cap:', (df['char_len'] > 400).sum())"
+(11867, 10)
+max char_len: 400
+rows over cap: 0
+```
+
+All acceptance criteria met: no chunk exceeds the configured cap (400, from the cloning engines), bucket distribution is near-uniform per decile (verified via test and visually balanced in the real per-book bucket counts above), `nb prepare` runs end to end for the real 5-book config and writes `data/chunks.parquet`.
+
+Observation carried forward, not a defect: each chapter's own heading line (e.g. "CHAPTER I.") becomes its own tiny leading chunk, since it's included in the chapter body per M03's design and pysbd treats it as a one-line "sentence". Harmless for chunking correctness; worth reconsidering if it turns out to be an odd thing for a TTS engine to read aloud, no later than M05 when engines actually synthesize these chunks.

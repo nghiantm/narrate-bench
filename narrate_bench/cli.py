@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 
+import pandas as pd
 import typer
 from pydantic import ValidationError
 
 from narrate_bench.cache import ContentCache
 from narrate_bench.config import Config, load_config
+from narrate_bench.text import chunk as text_chunk
 from narrate_bench.text import gutenberg
 from narrate_bench.text import normalize as text_normalize
 
@@ -35,7 +37,7 @@ def _fetch_cached(cache: ContentCache, gutenberg_id: int) -> str:
     return cache.path(key).read_text(encoding="utf-8")
 
 
-def _prepare_book(cfg: Config, cache: ContentCache, book) -> None:
+def _prepare_book(cfg: Config, cache: ContentCache, book) -> tuple[str, list[dict]]:
     raw = _fetch_cached(cache, book.gutenberg_id)
     stripped = gutenberg.strip_boilerplate(raw)
 
@@ -64,14 +66,26 @@ def _prepare_book(cfg: Config, cache: ContentCache, book) -> None:
         json.dumps(chapters, indent=2), encoding="utf-8"
     )
     print(f"{book.book_id}: {len(chapters)} chapters, {len(normalized)} chars")
+    return normalized, chapters
 
 
 @app.command()
 def prepare() -> None:
     cfg = load_config()
     cache = ContentCache(cfg.paths.cache)
+    max_chars = min(e.max_chars for e in cfg.engines.values())
+
+    all_chunks = []
     for book in cfg.books:
-        _prepare_book(cfg, cache, book)
+        normalized, chapters = _prepare_book(cfg, cache, book)
+        rows = text_chunk.build_chunks(book.book_id, normalized, chapters, max_chars)
+        buckets = pd.Series([r["bucket"] for r in rows]).value_counts().to_dict()
+        print(f"  {len(rows)} chunks, buckets={buckets}")
+        all_chunks.extend(rows)
+
+    chunks_df = pd.DataFrame(all_chunks)
+    cfg.paths.data.mkdir(parents=True, exist_ok=True)
+    chunks_df.to_parquet(cfg.paths.data / "chunks.parquet", index=False)
 
 
 @app.command()

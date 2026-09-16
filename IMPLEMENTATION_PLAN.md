@@ -21,7 +21,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 - `normalize.py`: NFKC, straight quotes, dash unification, abbreviation expansion table, numeral spelling (rule: integers <1000 and years spelled per config), collapse whitespace. Export `NORMALIZER_VERSION`.
 - Accept: 50 golden-case tests pass; running on one book produces `data/text/{book}.norm.txt` and a chapter index JSON; rerun is byte-identical.
 
-### M04 — Text: chunker `[ ]`
+### M04 — Text: chunker `[x]`
 - `chunk.py`: sentence split (pysbd or nltk punkt), bucket rotation, hard cap by min `max_chars`. Writes `chunks.parquet` with all engine-independent columns (human fields null).
 - Accept: tests prove no chunk exceeds cap; bucket counts per position decile are within ±20% of uniform; `nb prepare` works end to end for one book and prints chunk stats.
 

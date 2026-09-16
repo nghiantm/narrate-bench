@@ -18,25 +18,25 @@ sample_plan:
 
 books:
   - book_id: pride_and_prejudice
-    gutenberg_id: 1342
+    gutenberg_id: 42671  # 3-vol plain edition; 1342 is illustration-only chapter breaks, unusable for regex splitting
     librivox_url: "https://librivox.org/pride-and-prejudice-by-jane-austen/"
-    chapter_regex: "^Chapter \\d+"
+    chapter_regex: "^CHAPTER [IVXLC]+\\.?$"
   - book_id: treasure_island
     gutenberg_id: 120
     librivox_url: "https://librivox.org/treasure-island-version-4-by-robert-louis-stevenson/"
-    chapter_regex: "^Chapter [IVXLC]+"
+    chapter_regex: "^[IVXLC]+$"
   - book_id: sherlock_holmes
     gutenberg_id: 1661
     librivox_url: "https://librivox.org/the-adventures-of-sherlock-holmes-by-arthur-conan-doyle/"
-    chapter_regex: "^[A-Z ]+\\.$"
+    chapter_regex: "^[IVXLC]+\\. .+$"
   - book_id: franklin_autobiography
     gutenberg_id: 20203
     librivox_url: "https://librivox.org/the-autobiography-of-benjamin-franklin/"
-    chapter_regex: "^PART \\w+"
+    chapter_regex: "^[IVXLC]+$"
   - book_id: anne_of_green_gables
     gutenberg_id: 45
     librivox_url: "https://librivox.org/anne-of-green-gables-by-lucy-maud-montgomery/"
-    chapter_regex: "^CHAPTER [IVXLC]+"
+    chapter_regex: "^CHAPTER [IVXLC]+\\..*$"
 
 engines:
   piper:

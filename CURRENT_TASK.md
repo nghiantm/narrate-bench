@@ -4,26 +4,28 @@ Read ARCHITECTURE.md first. Work only on the milestone below. When its acceptanc
 
 ---
 
-## Active milestone: M03 — Text: fetch and normalize
+## Active milestone: M04 — Text: chunker
 
 ### Goal
-Produce the single normalized text file each book gets, per ARCHITECTURE.md non-negotiable 1: `data/text/{book_id}.norm.txt`, written once by `nb prepare` and read byte-identically by every later stage.
+Split each book's normalized text into the engine-independent chunks every later stage keys off, writing `chunks.parquet` per the ARCHITECTURE.md schema.
 
 ### Scope
-1. `narrate_bench/text/gutenberg.py`: `fetch(gutenberg_id: int) -> str` downloads the Gutenberg plain-text edition; `strip_boilerplate(raw: str) -> str` removes the standard Gutenberg header/footer (`*** START OF ... ***` / `*** END OF ... ***` markers and variants); `split_chapters(text: str, chapter_regex: str) -> list[tuple[str, str]]` splits on the book's configured heading regex, returning `(heading, body)` pairs.
-2. `narrate_bench/text/normalize.py`: `NORMALIZER_VERSION` constant; `normalize(text: str) -> str` doing, in a fixed documented order: Unicode NFKC, curly/smart quotes → straight, dash unification (em/en dash variants → one consistent form), abbreviation expansion via a small lookup table (e.g. `Mr.` → `Mister`, config-driven or a module-level table — pick one and document it), numeral spelling (integers under 1000 and years spelled out per a stated rule), whitespace collapse (no double spaces, no trailing whitespace, single `\n` between paragraphs).
-3. Wire `nb prepare` (in `cli.py`) to: for each book in `config.yaml`, fetch, strip boilerplate, split chapters, normalize the full text, write `data/text/{book_id}.norm.txt` and a chapter index JSON (`data/text/{book_id}.chapters.json`: list of `{heading, start_char, end_char}` into the normalized text) — using `ContentCache` so a rerun with the same inputs does not re-download. Print per-book chunk/chapter stats.
-4. `tests/test_normalize.py`: 50 golden-case tests, each a `(input, expected_output)` pair covering NFKC, quote straightening, dash unification, abbreviation expansion, numeral spelling, and whitespace collapse (a table-driven test is fine — 50 rows in a list, not 50 separate test functions, unless that reads better).
-5. `tests/test_gutenberg.py`: boilerplate stripping and chapter splitting against a small fixture text (do not hit the network in tests — use a fixture string, not a live download).
+1. `narrate_bench/text/chunk.py`:
+   - Sentence splitting: use `pysbd` or NLTK's punkt (pick one, add it to `pyproject.toml`/`requirements.lock` — this is the first real NLP dependency, still no ML/GPU libraries).
+   - Bucket rotation: XS (1 sentence) -> S (~3 sentences) -> M (~8 sentences) -> L (~20 sentences, capped at `min(engine.max_chars)` across `config.yaml`'s configured engines) -> XS -> ... within each chapter, per ARCHITECTURE.md "Chunk buckets". A chunk that would exceed the cap is truncated at the last full sentence that fits, not mid-sentence.
+   - `chunk_id = sha256(book_id + text)[:16]`.
+   - Build one `chunks.parquet` (pyarrow, via pandas) across all books with columns exactly per ARCHITECTURE.md's `chunks.parquet` schema: `chunk_id, book_id, chapter_idx, position_index, bucket, char_len, word_count, text, human_audio, align_conf` — `human_audio`/`align_conf` are null (this milestone doesn't touch human audio; that's M09/M10).
+   - `chapter_idx`: 0-based index into the book's chapter list (from `{book_id}.chapters.json`, written by M03's `nb prepare`). `position_index`: 0-based global order of the chunk within the whole book (across all chapters).
+2. Wire `chunk.py` into `nb prepare`: after writing `{book_id}.norm.txt` and `{book_id}.chapters.json`, chunk each book's normalized text and append its rows to the shared `chunks.parquet` (rewrite the full file each run — this is cheap CPU work with no need for the content cache here, unlike the network fetch).
+3. `tests/test_chunk.py`.
 
 ### Out of scope
-Chunking into buckets (M04), any engine/synthesis code, any audio code, downloading more than the one book used for the "one book" acceptance check during development (the full 5-book run happens naturally once `nb prepare` is correct, but is not itself a milestone requirement to execute here).
+Any engine/synthesis code, any audio code, human baseline handling (`human_audio`/`align_conf` stay null), parallelizing the chunker (it's CPU-cheap, no need).
 
 ### Acceptance criteria
-- 50 golden-case normalizer tests pass.
-- Gutenberg fetch/strip/split tests pass against fixtures (no network in tests).
-- Running `nb prepare` on one configured book produces `data/text/{book_id}.norm.txt` and `data/text/{book_id}.chapters.json`.
-- Running `nb prepare` again on the same book produces a byte-identical `.norm.txt` (diff is empty) and does not re-fetch (assert via cache hit / mock).
+- Test: no chunk's `char_len` exceeds `min(engine.max_chars)` from the config used to chunk it.
+- Test: for a book chunked with the full bucket rotation, bucket counts per position decile (split `position_index` into 10 equal-width bins across the book) are within ±20% of a uniform distribution across buckets.
+- `nb prepare` works end to end for the real 5-book config and prints chunk stats per book (count, bucket distribution).
 - `pytest -q` passes, including all prior milestone tests.
 
 ### Verification commands
@@ -31,8 +33,8 @@ Chunking into buckets (M04), any engine/synthesis code, any audio code, download
 . .venv/bin/activate
 pytest -q
 nb prepare
-diff <(nb prepare 2>&1; cat data/text/pride_and_prejudice.norm.txt) <(cat data/text/pride_and_prejudice.norm.txt)
+python -c "import pandas as pd; df = pd.read_parquet('results/../data/chunks.parquet') if False else pd.read_parquet('data/chunks.parquet'); print(df.groupby('book_id').size()); print(df['bucket'].value_counts())"
 ```
 
 ### On completion
-Append the TASK_LOG entry with the exact `pytest -q` output and `nb prepare` output, mark M03 `[x]` in IMPLEMENTATION_PLAN.md, then replace this file's active milestone with M04 — Text: chunker (copy its scope and acceptance criteria from IMPLEMENTATION_PLAN.md and expand into the same sections as above).
+Append the TASK_LOG entry with the exact `pytest -q` and chunk-stats output, mark M04 `[x]` in IMPLEMENTATION_PLAN.md, then replace this file's active milestone with M05 — Engine base + Piper + audio conform (copy its scope and acceptance criteria from IMPLEMENTATION_PLAN.md and expand into the same sections as above). Note before starting M05: Track B introduces the first real ML/engine dependencies (Piper) and the audio contract — check whether Piper needs anything from me (model download, license) before assuming it can run unattended.

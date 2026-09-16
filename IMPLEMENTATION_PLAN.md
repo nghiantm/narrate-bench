@@ -16,7 +16,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 - `cache.py` per interface. Key derivation exactly as specified. `write_atomic` writes to `{path}.tmp` then `os.replace`.
 - Accept: tests prove (a) identical inputs → identical key, (b) any single input change → different key, (c) a producer that raises leaves no file behind, (d) `has()` false before and true after write.
 
-### M03 — Text: fetch and normalize `[ ]`
+### M03 — Text: fetch and normalize `[x]`
 - `gutenberg.py`: download by Gutenberg ID, strip header/footer markers, split chapters on configured heading regex.
 - `normalize.py`: NFKC, straight quotes, dash unification, abbreviation expansion table, numeral spelling (rule: integers <1000 and years spelled per config), collapse whitespace. Export `NORMALIZER_VERSION`.
 - Accept: 50 golden-case tests pass; running on one book produces `data/text/{book}.norm.txt` and a chapter index JSON; rerun is byte-identical.

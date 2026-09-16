@@ -12,7 +12,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 - `cli.py`: typer app with all stage commands stubbed to print "not implemented" and exit 2; `nb status` prints config summary.
 - Accept: `pip install -e .` succeeds; `nb --help` lists all commands; `pytest` runs (zero tests OK); config loads and validation errors are readable.
 
-### M02 — Content cache `[ ]`
+### M02 — Content cache `[x]`
 - `cache.py` per interface. Key derivation exactly as specified. `write_atomic` writes to `{path}.tmp` then `os.replace`.
 - Accept: tests prove (a) identical inputs → identical key, (b) any single input change → different key, (c) a producer that raises leaves no file behind, (d) `has()` false before and true after write.
 

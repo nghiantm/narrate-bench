@@ -4,35 +4,35 @@ Read ARCHITECTURE.md first. Work only on the milestone below. When its acceptanc
 
 ---
 
-## Active milestone: M02 — Content cache
+## Active milestone: M03 — Text: fetch and normalize
 
 ### Goal
-Implement the single content-addressed cache every later stage writes through and reads from, exactly per the interface and key derivation in ARCHITECTURE.md, so no stage ever redoes work or leaves a corrupt partial file behind.
+Produce the single normalized text file each book gets, per ARCHITECTURE.md non-negotiable 1: `data/text/{book_id}.norm.txt`, written once by `nb prepare` and read byte-identically by every later stage.
 
 ### Scope
-1. `narrate_bench/cache.py`: implement `ContentCache` per the ARCHITECTURE.md interface:
-   - `key(self, stage, engine_id, voice_id, params, model_version, chunk_id) -> str` — `sha256(stage + engine_id + voice_id + sorted_json(params) + model_version + chunk_id)`. `params` must be serialized with sorted keys so key order never affects the hash.
-   - `has(self, key) -> bool`
-   - `path(self, key) -> Path` — `cache/{stage}/{key[:2]}/{key}`
-   - `write_atomic(self, key, producer: Callable[[Path], None]) -> Path` — producer writes to a `{path}.tmp` path (create parent dirs as needed), then `os.replace` into the final path. If `producer` raises, the `.tmp` file (and the final path) must not exist.
-2. Cache root comes from `Config.paths.cache` (already in `config.py` from M01); `ContentCache.__init__` takes a root `Path`.
-3. `tests/test_cache.py` covering the four proof points in the acceptance criteria below.
+1. `narrate_bench/text/gutenberg.py`: `fetch(gutenberg_id: int) -> str` downloads the Gutenberg plain-text edition; `strip_boilerplate(raw: str) -> str` removes the standard Gutenberg header/footer (`*** START OF ... ***` / `*** END OF ... ***` markers and variants); `split_chapters(text: str, chapter_regex: str) -> list[tuple[str, str]]` splits on the book's configured heading regex, returning `(heading, body)` pairs.
+2. `narrate_bench/text/normalize.py`: `NORMALIZER_VERSION` constant; `normalize(text: str) -> str` doing, in a fixed documented order: Unicode NFKC, curly/smart quotes → straight, dash unification (em/en dash variants → one consistent form), abbreviation expansion via a small lookup table (e.g. `Mr.` → `Mister`, config-driven or a module-level table — pick one and document it), numeral spelling (integers under 1000 and years spelled out per a stated rule), whitespace collapse (no double spaces, no trailing whitespace, single `\n` between paragraphs).
+3. Wire `nb prepare` (in `cli.py`) to: for each book in `config.yaml`, fetch, strip boilerplate, split chapters, normalize the full text, write `data/text/{book_id}.norm.txt` and a chapter index JSON (`data/text/{book_id}.chapters.json`: list of `{heading, start_char, end_char}` into the normalized text) — using `ContentCache` so a rerun with the same inputs does not re-download. Print per-book chunk/chapter stats.
+4. `tests/test_normalize.py`: 50 golden-case tests, each a `(input, expected_output)` pair covering NFKC, quote straightening, dash unification, abbreviation expansion, numeral spelling, and whitespace collapse (a table-driven test is fine — 50 rows in a list, not 50 separate test functions, unless that reads better).
+5. `tests/test_gutenberg.py`: boilerplate stripping and chapter splitting against a small fixture text (do not hit the network in tests — use a fixture string, not a live download).
 
 ### Out of scope
-Any real stage logic (text, synth, ASR, etc.), any engine or model code, wiring the cache into the CLI stage commands (they stay stubbed until the milestone that implements each stage).
+Chunking into buckets (M04), any engine/synthesis code, any audio code, downloading more than the one book used for the "one book" acceptance check during development (the full 5-book run happens naturally once `nb prepare` is correct, but is not itself a milestone requirement to execute here).
 
 ### Acceptance criteria
-- Test: identical inputs to `key()` → identical key, called twice.
-- Test: changing any single input (`stage`, `engine_id`, `voice_id`, one entry in `params`, `model_version`, or `chunk_id`) → a different key than the baseline.
-- Test: a `producer` callable that raises inside `write_atomic` leaves no file at the temp path or the final path.
-- Test: `has(key)` is `False` before `write_atomic`, `True` after.
-- `pytest -q` passes, including the existing M01 config tests.
+- 50 golden-case normalizer tests pass.
+- Gutenberg fetch/strip/split tests pass against fixtures (no network in tests).
+- Running `nb prepare` on one configured book produces `data/text/{book_id}.norm.txt` and `data/text/{book_id}.chapters.json`.
+- Running `nb prepare` again on the same book produces a byte-identical `.norm.txt` (diff is empty) and does not re-fetch (assert via cache hit / mock).
+- `pytest -q` passes, including all prior milestone tests.
 
 ### Verification commands
 ```
 . .venv/bin/activate
 pytest -q
+nb prepare
+diff <(nb prepare 2>&1; cat data/text/pride_and_prejudice.norm.txt) <(cat data/text/pride_and_prejudice.norm.txt)
 ```
 
 ### On completion
-Append the TASK_LOG entry with the exact `pytest -q` output, mark M02 `[x]` in IMPLEMENTATION_PLAN.md, then replace this file's active milestone with M03 — Text: fetch and normalize (copy its scope and acceptance criteria from IMPLEMENTATION_PLAN.md and expand into the same sections as above).
+Append the TASK_LOG entry with the exact `pytest -q` output and `nb prepare` output, mark M03 `[x]` in IMPLEMENTATION_PLAN.md, then replace this file's active milestone with M04 — Text: chunker (copy its scope and acceptance criteria from IMPLEMENTATION_PLAN.md and expand into the same sections as above).

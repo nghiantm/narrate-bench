@@ -37,7 +37,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 - Add `status=silent` detection (RMS below threshold) and `status=truncated` (audio_dur_s < 0.4 × expected from chars-per-second prior).
 - Accept: test passes; deliberately truncated mock output is flagged.
 
-### M07 — Kokoro and XTTS `[ ]`
+### M07 — Kokoro and XTTS `[x]`
 - `kokoro.py` (CPU), `xtts.py` (GPU, fixed reference clip, speaker embedding cached once). Add a GPU model guard in the runner: acquire before load, release after unload.
 - Accept: one chapter each; outputs pass conform; listening spot-check of 5 chunks per engine noted in TASK_LOG; `nvidia-smi` shows one TTS model resident at a time.
 

@@ -46,29 +46,29 @@ engines:
     device: cpu
     model_revision: "1.2.0"  # verify
   kokoro:
-    voice_id: "af_heart"  # verify
+    voice_id: "af_heart"  # confirmed: hexgrad/Kokoro-82M's af_heart voice, matches ARCHITECTURE.md's pin
     params: {}
     max_chars: 1000
     device: cpu
-    model_revision: "v1.0"  # verify
+    model_revision: "v1.0"  # confirmed: hexgrad/Kokoro-82M v1.0 voices, package kokoro==0.9.4
   xtts:
     voice_id: "reference"
     params: {}
-    max_chars: 400
+    max_chars: 250  # XTTS v2's own hard limit for English; verified directly against the library (it warns above this)
     device: cuda
-    model_revision: "v2.0.3"  # verify
+    model_revision: "v2.0.3"  # confirmed: coqui-tts==0.27.5's model registry serves "XTTS-v2.0.3", commit 480a6cdf7, hash 10f92b55c512af7a8d39d650547a15a7
     reference_clip: "data/reference_clip.wav"
   f5tts:
     voice_id: "reference"
     params: {}
-    max_chars: 400
+    max_chars: 400  # verify against F5-TTS's own limit in M08 -- shared chunk cap is min() across engines, currently 250 via xtts regardless
     device: cuda
     model_revision: "base"  # verify
     reference_clip: "data/reference_clip.wav"
   chatterbox:
     voice_id: "reference"
     params: {}
-    max_chars: 400
+    max_chars: 400  # verify against Chatterbox's own limit in M08 -- shared chunk cap is min() across engines, currently 250 via xtts regardless
     device: cuda
     model_revision: "main"  # verify
     reference_clip: "data/reference_clip.wav"

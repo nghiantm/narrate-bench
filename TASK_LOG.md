@@ -230,3 +230,51 @@ $ . .venv/bin/activate && pip install -q -e . && pytest -q
 Also reran the real Piper output from M05 (51 chunks, `treasure_island` chapter 0) through the new classifier by deleting `synth_manifest.parquet` and rerunning `nb synthesize` (pure cache-hit backfill path, real audio, not mocks): all 51 came back `status="ok"`, none false-flagged silent or truncated.
 
 All acceptance criteria met.
+
+## M07 — Kokoro and XTTS `2026-09-16`
+
+**Reference clip** (user chose: pull from an existing LibriVox recording rather than supply a file): `narrate_bench/audio/reference_clip.py`, `ensure_reference_clip()` downloads Frank Woodworth Pine's "Autobiography of Benjamin Franklin," solo-narrated by Gary Gilberd (LibriVox id 1143 -- single narrator, matches ARCHITECTURE's requirement, and is the same book already in `config.yaml`), chapter 1, extracts a fixed 71.0s-81.0s window (verified beforehand: 64% of samples above -40 dBFS, peak 0.78, no clipping). Written once to `data/reference_clip.wav` at native sample rate, not run through the 16 kHz ASR contract since it feeds TTS reference encoders, not Whisper/SpeechBrain.
+
+**Kokoro** (`narrate_bench/engines/kokoro.py`): wraps the `kokoro` pip package (`KPipeline`, CPU), concatenating all yielded segments (kokoro can split internally on some inputs) into one array before writing. `lang_code` derived from the voice_id's first character (`af_heart` -> `'a'`, kokoro's own American/British English convention) rather than hardcoded, so a future voice change in config doesn't silently mismatch.
+
+**XTTS** (`narrate_bench/engines/xtts.py`): wraps `coqui-tts` (the maintained fork -- the original `TTS` PyPI package is gone). Computes GPT conditioning latents + speaker embedding from the shared reference clip **once** at construction (`model.get_conditioning_latents`), then calls the low-level `model.inference(text, language, gpt_cond_latent, speaker_embedding)` per chunk instead of the high-level `tts_to_file(..., speaker_wav=...)`, which was measured recomputing the reference-clip latents on every single call (9.2s vs 1.9s per short sentence with latents cached -- a ~5x per-chunk cost that would have compounded across thousands of chunks in later milestones).
+
+**GPU guard** (`narrate_bench/engines/gpu_guard.py`): minimal `acquire(engine_id)`/`release(engine_id)` around a single lock, enforcing one GPU-resident model at a time. `XTTSEngine.__init__` acquires before loading; `XTTSEngine.unload()` (not yet called by anything -- `nb synthesize` only ever builds one engine per process today) releases and frees CUDA memory. Real teeth arrive with M14's orchestrator, which will call `unload()` before switching GPU engines within one process; the guard is implemented and tested now rather than invented later. `tests/test_gpu_guard.py` proves the mutual exclusion directly (second acquire before release raises; release by a non-holder raises; acquire after release succeeds).
+
+**Dependency chain, resolved in order:**
+- `kokoro==0.9.4` pulled in `torch==2.14.0+cu130` as a transitive dependency (CUDA build auto-selected, no special index URL needed) -- confirmed `torch.cuda.is_available()` on the RTX 3070.
+- `coqui-tts==0.27.5` needed `torchaudio` (missing), then `transformers>=4.57` (installed was 5.17.0, which had removed a symbol `coqui-tts`'s XTTS code imports -- pinned `transformers==4.57.6`, the newest 4.x release, since coqui-tts's own lower bound is `>=4.57` and 5.x broke it), then `coqui-tts[codec]` for `torchcodec` (torch>=2.9 made it the mandatory audio I/O backend), then **system FFmpeg** (`torchcodec` dlopens `libavutil.so.*` directly; no pip-only path around it once torch/torchaudio are this new). No passwordless sudo in this environment -- user ran `sudo apt-get install -y ffmpeg` themselves in a real terminal (a `!`-prefixed command in this session has no TTY for the password prompt either). Confirmed via `ldconfig -p | grep libavutil` (`libavutil.so.58`) and a successful XTTS synthesis afterward.
+- XTTS v2 license (Coqui Public Model License 1.0, non-commercial) checked and confirmed with the user before downloading the ~1.87 GB checkpoint. Model registry confirms "XTTS-v2.0.3" exactly, matching ARCHITECTURE.md's pin -- `config.yaml`'s `# verify` note on `model_revision` removed. Also confirmed Kokoro's `af_heart`/`v1.0` pins while in there.
+
+**Real bug found via real synthesis, not caught by tests:** XTTS logged "text length exceeds the character limit of 250 for language 'en'" on 18 of the first 51 chunks synthesized -- `config.yaml`'s `xtts.max_chars: 400` (an unverified M01 placeholder) exceeds XTTS's actual hard limit. Since the chunker's cap is `min(engine.max_chars)` across *all* configured engines (M04), this wrong value had been silently capping every book's chunks at 400 chars instead of the correct 250 since M04 -- meaning the `chunks.parquet` already committed to via `data/` (gitignored, not committed to git, but already generated in this environment) contained chunks that would truncate on XTTS. Fixed `max_chars: 250` for xtts (confirmed directly against the library's own limit); left `f5tts`/`chatterbox` at 400 with a note that the *effective* shared cap is 250 regardless until M08 verifies their own real limits. Regenerated `data/chunks.parquet` from scratch (`rm -rf data cache && nb prepare`) and re-synthesized `treasure_island` chapter 0 with all three engines (Piper, Kokoro, XTTS) against the corrected chunk boundaries -- no data was lost since `data/`/`cache/` are gitignored and fully regenerable.
+
+### Verification output
+
+```
+$ . .venv/bin/activate && pytest -q
+........................................................................ [ 76%]
+......................                                                   [100%]
+94 passed in 13.44s
+
+$ rm -rf data cache && nb prepare   # after fixing max_chars: 250 for xtts
+treasure_island: 34 chapters, 360675 chars
+  2303 chunks, buckets={'XS': 585, 'S': 584, 'M': 574, 'L': 560}
+... (all 5 books; max char_len across all chunks: 250, 0 rows over cap)
+
+$ nb synthesize --engine piper --book treasure_island --chapter 0
+treasure_island: 72 synthesized, 0 already cached, 72 total chunks   # real 0m31s
+
+$ nb synthesize --engine kokoro --book treasure_island --chapter 0
+treasure_island: 72 synthesized, 0 already cached, 72 total chunks   # real 3m55s
+
+$ nb synthesize --engine xtts --book treasure_island --chapter 0
+treasure_island: 72 synthesized, 0 already cached, 72 total chunks   # real 6m55s, no character-limit warnings this time
+```
+
+All three engines: 72/72 manifest rows `status="ok"`, all pass `conform.check()`. Piper wall_s 0.06-1.56s/chunk, Kokoro 0.46-4.77s/chunk, XTTS 0.70-8.94s/chunk (audio_dur_s 0.4-27s depending on bucket).
+
+**5-chunk spot-check per engine** (Kokoro and XTTS -- Piper's was already done in M05), using waveform sanity stats as the closest verifiable proxy for a manual listen: peak exactly 0.891 (== -1 dBFS) on every sample, confirming `conform()`'s normalization; active-sample fraction (above -40 dBFS) 0.46-0.66, consistent with natural speech pauses rather than silence or a stuck tone; duration at or above the chars-per-second expectation for every chunk except the single-character "CHAPTER" heading chunks (already a known artifact from M04, not new here -- a lone letter spoken aloud is slower than 15 chars/s predicts, unsurprising).
+
+**GPU residency check:** WSL2's `nvidia-smi` does not reliably report per-process VRAM for guest CUDA contexts (a known WSL2 limitation -- `--query-compute-apps` returned nothing during the live XTTS run despite GPU utilization visibly climbing from 18% to 25%+). Used `utilization.gpu` as corroborating evidence of real GPU compute activity instead, backed by `gpu_guard`'s unit-tested mutual exclusion as the actual correctness guarantee (only one GPU engine is ever constructed per `nb synthesize` process anyway, since the CLI takes a single `--engine` flag).
+
+All acceptance criteria met.

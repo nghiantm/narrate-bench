@@ -93,10 +93,24 @@ def prepare() -> None:
     chunks_df.to_parquet(cfg.paths.data / "chunks.parquet", index=False)
 
 
+CHARS_PER_SECOND = 15.0  # ~150 words/min typical audiobook narration pace
+
+
 def _load_manifest(manifest_path: Path) -> pd.DataFrame:
     if manifest_path.exists():
         return pd.read_parquet(manifest_path)
     return pd.DataFrame(columns=["chunk_id", "engine_id", "synth_path", "wall_s", "audio_dur_s", "status"])
+
+
+def _classify(path: Path, text: str) -> tuple[str, float]:
+    info = sf.info(str(path))
+    audio_dur_s = info.frames / info.samplerate
+    expected_s = len(text) / CHARS_PER_SECOND
+    if audio_conform.is_silent(path):
+        return "silent", audio_dur_s
+    if audio_dur_s < 0.4 * expected_s:
+        return "truncated", audio_dur_s
+    return "ok", audio_dur_s
 
 
 def _synthesize_chunk(eng, cache: ContentCache, model_revision: str, chunk_id: str, text: str) -> dict:
@@ -132,14 +146,14 @@ def _synthesize_chunk(eng, cache: ContentCache, model_revision: str, chunk_id: s
             "status": f"engine_error: {e}",
         }
 
-    info = sf.info(str(final_path))
+    status, audio_dur_s = _classify(final_path, text)
     return {
         "chunk_id": chunk_id,
         "engine_id": eng.engine_id,
         "synth_path": str(final_path),
         "wall_s": timing["wall_s"],
-        "audio_dur_s": info.frames / info.samplerate,
-        "status": "ok",
+        "audio_dur_s": audio_dur_s,
+        "status": status,
     }
 
 
@@ -185,15 +199,15 @@ def synthesize(
         if cache.has(key):
             n_cached += 1
             if (row.chunk_id, eng.engine_id) not in existing_keys:
-                info = sf.info(str(cache.path(key)))
+                status, audio_dur_s = _classify(cache.path(key), row.text)
                 new_rows.append(
                     {
                         "chunk_id": row.chunk_id,
                         "engine_id": eng.engine_id,
                         "synth_path": str(cache.path(key)),
                         "wall_s": None,
-                        "audio_dur_s": info.frames / info.samplerate,
-                        "status": "ok",
+                        "audio_dur_s": audio_dur_s,
+                        "status": status,
                     }
                 )
             continue

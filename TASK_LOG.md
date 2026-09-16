@@ -209,3 +209,24 @@ real	0m8.124s   # model load only, zero engine.synthesize() calls
 Spot-checked with a Python one-liner: all 51 manifest rows `status == "ok"`, all pass `conform.check()` (16 kHz mono PCM16, peak within contract), `wall_s` non-negative for all chunks after the monotonic-clock fix. Real per-chunk synth time ranged ~0.07-0.95s on CPU for chunks up to 400 chars.
 
 All acceptance criteria met. `data/models/piper/*.onnx` (~63 MB) is gitignored (under `data/`), downloaded fresh on first `nb synthesize` run in any environment.
+
+## M06 — Resumability proof `2026-09-16`
+
+Resumability was already mostly correct by construction from M02/M05 (cache is the single source of truth for "was this chunk actually synthesized"; the manifest is derived bookkeeping that gets backfilled from cache state on every run), so this milestone is primarily the proof plus the two status detections.
+
+`tests/test_resumability.py`: `CrashAfterNEngine` completes `crash_after` chunks normally, then raises `KeyboardInterrupt` on the next call — deliberately a `BaseException`, not `Exception`, so it is NOT swallowed by `_synthesize_chunk`'s per-chunk `except Exception` (that layer exists to keep a normal engine failure from aborting the run; a real process kill is a different thing and should propagate). The crashing chunk gets no cache entry (per M02's write_atomic guarantee). "Restarting" with a fresh engine instance against the same cache dir picks up exactly the un-synthesized remainder — `engine1.calls + engine2.calls == n_chunks`, no chunk synthesized twice, and `synth_manifest.parquet` ends up with exactly `n_chunks` unique rows even though the crash happened before that run's in-memory manifest rows were ever flushed to disk (proving the cache-hit backfill path in `synthesize()` correctly reclassifies and re-adds rows for chunks that exist in the cache but are missing from the manifest).
+
+`status=silent`: `audio.conform.is_silent()` computes RMS over the whole conformed clip and flags it below the same -40 dBFS floor `conform()` already uses to define "not speech" when trimming — reusing an existing, already-justified constant rather than inventing a new one. `status=truncated`: `CHARS_PER_SECOND = 15.0` (~150 words/min, typical audiobook narration pace) gives an expected duration from chunk text length; `audio_dur_s < 0.4 * expected` is flagged truncated. Both checks are in a shared `_classify()` used by both the real-synthesis path (`_synthesize_chunk`) and the cache-hit manifest-backfill path in `synthesize()` — the backfill branch previously hardcoded `status="ok"` unconditionally, which would have silently missed silent/truncated chunks reclassified on a manifest-less rerun; fixed as part of this milestone since both paths write the same manifest schema and must apply the same classification.
+
+### Verification output
+
+```
+$ . .venv/bin/activate && pip install -q -e . && pytest -q
+........................................................................ [ 79%]
+...................                                                      [100%]
+91 passed in 11.50s
+```
+
+Also reran the real Piper output from M05 (51 chunks, `treasure_island` chapter 0) through the new classifier by deleting `synth_manifest.parquet` and rerunning `nb synthesize` (pure cache-hit backfill path, real audio, not mocks): all 51 came back `status="ok"`, none false-flagged silent or truncated.
+
+All acceptance criteria met.

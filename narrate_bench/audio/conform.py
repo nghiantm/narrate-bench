@@ -61,6 +61,17 @@ def conform(in_path: Path, out_path: Path) -> None:
     sf.write(str(out_path), audio_i16, TARGET_SR, subtype="PCM_16", format="WAV")
 
 
+def is_silent(path: Path, threshold_dbfs: float = SILENCE_DBFS) -> bool:
+    """RMS below the same -40 dBFS floor conform() uses to define 'silence'
+    when trimming, applied to the whole clip rather than a leading/trailing
+    span."""
+    audio, _ = sf.read(str(path), dtype="float32")
+    rms = float(np.sqrt(np.mean(audio.astype(np.float64) ** 2))) if len(audio) else 0.0
+    if rms == 0:
+        return True
+    return 20 * np.log10(rms) < threshold_dbfs
+
+
 def check(path: Path) -> None:
     """Raise AssertionError naming the violated part of the audio contract."""
     info = sf.info(str(path))

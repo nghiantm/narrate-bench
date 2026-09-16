@@ -32,7 +32,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 - `nb synthesize --engine piper --book <id>` iterates chunks, skips cached, conforms output, writes cache + a synth manifest row (synth_path, wall_s, dur_s, status).
 - Accept: synthesize one chapter; every output passes `conform.check()`; second run makes zero engine calls (assert via mock in test); `nb status` shows coverage.
 
-### M06 — Resumability proof `[ ]`
+### M06 — Resumability proof `[x]`
 - Test that starts synthesis with a mock engine, kills after N chunks (raise in worker), restarts, and asserts total engine calls == total chunks.
 - Add `status=silent` detection (RMS below threshold) and `status=truncated` (audio_dur_s < 0.4 × expected from chars-per-second prior).
 - Accept: test passes; deliberately truncated mock output is flagged.

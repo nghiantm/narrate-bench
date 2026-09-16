@@ -1,0 +1,74 @@
+paths:
+  data: data
+  cache: cache
+  results: results
+
+whisper:
+  model: large-v3
+  backend: faster-whisper
+  compute_type: float16
+  beam_size: 5
+  temperature: 0.0
+  condition_on_previous_text: false
+  vad_filter: true
+  language: en
+
+sample_plan:
+  mode: full
+
+books:
+  - book_id: pride_and_prejudice
+    gutenberg_id: 1342
+    librivox_url: "https://librivox.org/pride-and-prejudice-by-jane-austen/"
+    chapter_regex: "^Chapter \\d+"
+  - book_id: treasure_island
+    gutenberg_id: 120
+    librivox_url: "https://librivox.org/treasure-island-version-4-by-robert-louis-stevenson/"
+    chapter_regex: "^Chapter [IVXLC]+"
+  - book_id: sherlock_holmes
+    gutenberg_id: 1661
+    librivox_url: "https://librivox.org/the-adventures-of-sherlock-holmes-by-arthur-conan-doyle/"
+    chapter_regex: "^[A-Z ]+\\.$"
+  - book_id: franklin_autobiography
+    gutenberg_id: 20203
+    librivox_url: "https://librivox.org/the-autobiography-of-benjamin-franklin/"
+    chapter_regex: "^PART \\w+"
+  - book_id: anne_of_green_gables
+    gutenberg_id: 45
+    librivox_url: "https://librivox.org/anne-of-green-gables-by-lucy-maud-montgomery/"
+    chapter_regex: "^CHAPTER [IVXLC]+"
+
+engines:
+  piper:
+    voice_id: "en_US-lessac-medium"  # verify
+    params: {}
+    max_chars: 1000
+    device: cpu
+    model_revision: "1.2.0"  # verify
+  kokoro:
+    voice_id: "af_heart"  # verify
+    params: {}
+    max_chars: 1000
+    device: cpu
+    model_revision: "v1.0"  # verify
+  xtts:
+    voice_id: "reference"
+    params: {}
+    max_chars: 400
+    device: cuda
+    model_revision: "v2.0.3"  # verify
+    reference_clip: "data/reference_clip.wav"
+  f5tts:
+    voice_id: "reference"
+    params: {}
+    max_chars: 400
+    device: cuda
+    model_revision: "base"  # verify
+    reference_clip: "data/reference_clip.wav"
+  chatterbox:
+    voice_id: "reference"
+    params: {}
+    max_chars: 400
+    device: cuda
+    model_revision: "main"  # verify
+    reference_clip: "data/reference_clip.wav"

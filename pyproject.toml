@@ -1,0 +1,24 @@
+[project]
+name = "narrate-bench"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "typer",
+    "pydantic>=2",
+    "pandas",
+    "pyarrow",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+nb = "narrate_bench.cli:app"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["narrate_bench*"]

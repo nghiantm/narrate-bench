@@ -9,6 +9,10 @@ dependencies = [
     "pyarrow",
     "pyyaml",
     "pysbd",
+    "piper-tts",
+    "soundfile",
+    "scipy",
+    "numpy",
 ]
 
 [project.optional-dependencies]

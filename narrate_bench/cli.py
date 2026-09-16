@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
 
 import pandas as pd
+import soundfile as sf
 import typer
 from pydantic import ValidationError
 
+from narrate_bench.audio import conform as audio_conform
 from narrate_bench.cache import ContentCache
 from narrate_bench.config import Config, load_config
+from narrate_bench.engines import registry
 from narrate_bench.text import chunk as text_chunk
 from narrate_bench.text import gutenberg
 from narrate_bench.text import normalize as text_normalize
@@ -88,9 +93,119 @@ def prepare() -> None:
     chunks_df.to_parquet(cfg.paths.data / "chunks.parquet", index=False)
 
 
+def _load_manifest(manifest_path: Path) -> pd.DataFrame:
+    if manifest_path.exists():
+        return pd.read_parquet(manifest_path)
+    return pd.DataFrame(columns=["chunk_id", "engine_id", "synth_path", "wall_s", "audio_dur_s", "status"])
+
+
+def _synthesize_chunk(eng, cache: ContentCache, model_revision: str, chunk_id: str, text: str) -> dict:
+    key = cache.key(
+        stage="synthesize",
+        engine_id=eng.engine_id,
+        voice_id=eng.voice_id,
+        params=eng.params,
+        model_version=model_revision,
+        chunk_id=chunk_id,
+    )
+    timing: dict = {}
+
+    def producer(tmp_path: Path) -> None:
+        raw_tmp = tmp_path.with_suffix(".raw.wav")
+        result = eng.synthesize(text, raw_tmp)
+        if result.error is not None:
+            raw_tmp.unlink(missing_ok=True)
+            raise RuntimeError(result.error)
+        audio_conform.conform(raw_tmp, tmp_path)
+        raw_tmp.unlink(missing_ok=True)
+        timing["wall_s"] = result.wall_s
+
+    try:
+        final_path = cache.write_atomic(key, producer)
+    except Exception as e:  # per-chunk failures must not abort the run
+        return {
+            "chunk_id": chunk_id,
+            "engine_id": eng.engine_id,
+            "synth_path": None,
+            "wall_s": None,
+            "audio_dur_s": None,
+            "status": f"engine_error: {e}",
+        }
+
+    info = sf.info(str(final_path))
+    return {
+        "chunk_id": chunk_id,
+        "engine_id": eng.engine_id,
+        "synth_path": str(final_path),
+        "wall_s": timing["wall_s"],
+        "audio_dur_s": info.frames / info.samplerate,
+        "status": "ok",
+    }
+
+
 @app.command()
-def synthesize() -> None:
-    _stub("synthesize")
+def synthesize(
+    engine: str = typer.Option(..., "--engine"),
+    book: str = typer.Option(..., "--book"),
+    chapter: int = typer.Option(None, "--chapter"),
+) -> None:
+    cfg = load_config()
+    eng = registry.get(engine, cfg)
+    cache = ContentCache(cfg.paths.cache)
+
+    chunks_path = cfg.paths.data / "chunks.parquet"
+    if not chunks_path.exists():
+        print("chunks.parquet not found; run `nb prepare` first")
+        raise typer.Exit(1)
+
+    df = pd.read_parquet(chunks_path)
+    df = df[df["book_id"] == book]
+    if chapter is not None:
+        df = df[df["chapter_idx"] == chapter]
+    if df.empty:
+        print(f"no chunks found for book={book!r} chapter={chapter!r}")
+        raise typer.Exit(1)
+
+    manifest_path = cfg.paths.data / "synth_manifest.parquet"
+    manifest = _load_manifest(manifest_path)
+    existing_keys = set(zip(manifest["chunk_id"], manifest["engine_id"]))
+    model_revision = cfg.engines[engine].model_revision
+
+    new_rows = []
+    n_cached = n_synth = 0
+    for row in df.itertuples():
+        key = cache.key(
+            stage="synthesize",
+            engine_id=eng.engine_id,
+            voice_id=eng.voice_id,
+            params=eng.params,
+            model_version=model_revision,
+            chunk_id=row.chunk_id,
+        )
+        if cache.has(key):
+            n_cached += 1
+            if (row.chunk_id, eng.engine_id) not in existing_keys:
+                info = sf.info(str(cache.path(key)))
+                new_rows.append(
+                    {
+                        "chunk_id": row.chunk_id,
+                        "engine_id": eng.engine_id,
+                        "synth_path": str(cache.path(key)),
+                        "wall_s": None,
+                        "audio_dur_s": info.frames / info.samplerate,
+                        "status": "ok",
+                    }
+                )
+            continue
+        n_synth += 1
+        new_rows.append(_synthesize_chunk(eng, cache, model_revision, row.chunk_id, row.text))
+
+    if new_rows:
+        manifest = pd.concat([manifest, pd.DataFrame(new_rows)], ignore_index=True)
+        manifest = manifest.drop_duplicates(subset=["chunk_id", "engine_id"], keep="last")
+        manifest.to_parquet(manifest_path, index=False)
+
+    print(f"{book}: {n_synth} synthesized, {n_cached} already cached, {len(df)} total chunks")
 
 
 @app.command()
@@ -141,6 +256,19 @@ def status() -> None:
 
     print("whisper:")
     print(f"  model={cfg.whisper.model} backend={cfg.whisper.backend} beam={cfg.whisper.beam_size}")
+
+    chunks_path = cfg.paths.data / "chunks.parquet"
+    if chunks_path.exists():
+        chunks = pd.read_parquet(chunks_path)
+        manifest_path = cfg.paths.data / "synth_manifest.parquet"
+        manifest = _load_manifest(manifest_path)
+        total = len(chunks)
+        print(f"synthesis coverage ({total} chunks total):")
+        for name in cfg.engines:
+            done = manifest.loc[
+                (manifest["engine_id"] == name) & (manifest["status"] == "ok"), "chunk_id"
+            ].nunique()
+            print(f"  {name}: {done}/{total}")
 
 
 if __name__ == "__main__":

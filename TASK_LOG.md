@@ -159,3 +159,53 @@ rows over cap: 0
 All acceptance criteria met: no chunk exceeds the configured cap (400, from the cloning engines), bucket distribution is near-uniform per decile (verified via test and visually balanced in the real per-book bucket counts above), `nb prepare` runs end to end for the real 5-book config and writes `data/chunks.parquet`.
 
 Observation carried forward, not a defect: each chapter's own heading line (e.g. "CHAPTER I.") becomes its own tiny leading chunk, since it's included in the chapter body per M03's design and pysbd treats it as a one-line "sentence". Harmless for chunking correctness; worth reconsidering if it turns out to be an odd thing for a TTS engine to read aloud, no later than M05 when engines actually synthesize these chunks.
+
+## M05 — Engine base + Piper + audio conform `2026-09-16`
+
+`narrate_bench/engines/base.py`: `TTSEngine` Protocol and `SynthResult` dataclass exactly per ARCHITECTURE.md. `narrate_bench/engines/registry.py`: `get(name, cfg)` builds a configured engine from `config.yaml`, raising on an unconfigured or unimplemented name. `narrate_bench/engines/piper.py`: `PiperEngine` wraps `piper-tts` (pip-only install, no system packages — checked before committing to this design); `ensure_voice_files()` downloads the ONNX model + config JSON from the `rhasspy/piper-voices` HuggingFace repo into `data/models/piper/` on first use (freely licensed, no login/click-through) and reuses them after.
+
+`narrate_bench/audio/conform.py`: `conform()` enforces the fixed contract — mono, resampled to 16 kHz via `scipy.signal.resample_poly`, silence-trimmed at −40 dBFS with a 100 ms pad, peak-normalized to −1 dBFS, written as PCM16 WAV (`soundfile` + `numpy`, no heavier audio framework needed). `check()` raises `AssertionError` naming which part of the contract was violated.
+
+`nb synthesize --engine <name> --book <id> [--chapter <n>]`: reads `chunks.parquet`, skips chunks already in `ContentCache` (stage `synthesize`, keyed by engine/voice/params/model_revision/chunk_id — reusing M02's cache exactly as designed), synthesizes+conforms the rest, and records a manifest row (`chunk_id, engine_id, synth_path, wall_s, audio_dur_s, status`) in `data/synth_manifest.parquet`. Per-chunk engine failures are caught and recorded as `status="engine_error: ..."` rather than aborting the run (ARCHITECTURE non-negotiable 6). `nb status` gained a synthesis coverage section (chunks done per engine vs. total).
+
+**Two bugs found and fixed while running this against real Piper output, not just mocks:**
+1. `soundfile.write()` on the cache's extension-less content-hash paths failed with `LibsndfileError: No format specified` — every single chunk in the first real run came back `engine_error`. `sf.read`/`sf.info` autodetect the format from file content fine without an extension; only `write()` needs it. Fixed by passing `format="WAV"` explicitly in `conform()`.
+2. One chunk's recorded `wall_s` came back negative (−0.98s) from a run of 51 real chunks — `time.time()` is wall-clock and not protected against a system clock adjustment mid-call (observed under WSL2). Switched `piper.py`'s timing to `time.monotonic()`, which is immune to clock adjustments; reran and confirmed non-negative timings across all chunks.
+
+`tests/test_synthesize.py`: a `CountingEngine` test double (writes a real conforming tone, counts calls) proves a second `synthesize()` call makes zero engine calls once every chunk is cached, and that manifest rows point at audio passing `conform.check()`.
+
+### Verification output
+
+```
+$ . .venv/bin/activate && pip install -q -e . && pytest -q
+........................................................................ [ 82%]
+...............                                                          [100%]
+87 passed in 11.39s
+
+$ rm -rf data cache && nb prepare > /dev/null
+$ nb status
+...
+synthesis coverage (11867 chunks total):
+  piper: 0/11867
+  kokoro: 0/11867
+  xtts: 0/11867
+  f5tts: 0/11867
+  chatterbox: 0/11867
+
+$ time nb synthesize --engine piper --book treasure_island --chapter 0
+treasure_island: 51 synthesized, 0 already cached, 51 total chunks
+real	0m29.097s
+
+$ nb status   # after synth
+synthesis coverage (11867 chunks total):
+  piper: 51/11867
+  ...
+
+$ time nb synthesize --engine piper --book treasure_island --chapter 0   # second run
+treasure_island: 0 synthesized, 51 already cached, 51 total chunks
+real	0m8.124s   # model load only, zero engine.synthesize() calls
+```
+
+Spot-checked with a Python one-liner: all 51 manifest rows `status == "ok"`, all pass `conform.check()` (16 kHz mono PCM16, peak within contract), `wall_s` non-negative for all chunks after the monotonic-clock fix. Real per-chunk synth time ranged ~0.07-0.95s on CPU for chunks up to 400 chars.
+
+All acceptance criteria met. `data/models/piper/*.onnx` (~63 MB) is gitignored (under `data/`), downloaded fresh on first `nb synthesize` run in any environment.

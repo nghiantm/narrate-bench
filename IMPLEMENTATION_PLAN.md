@@ -27,7 +27,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 
 ## Track B — Synthesis (all engines local, open-source)
 
-### M05 — Engine base + Piper + audio conform `[ ]`
+### M05 — Engine base + Piper + audio conform `[x]`
 - `engines/base.py`, `registry.py`, `piper.py`. `audio/conform.py` enforcing the audio contract with a `check()` that raises on violation.
 - `nb synthesize --engine piper --book <id>` iterates chunks, skips cached, conforms output, writes cache + a synth manifest row (synth_path, wall_s, dur_s, status).
 - Accept: synthesize one chapter; every output passes `conform.check()`; second run makes zero engine calls (assert via mock in test); `nb status` shows coverage.

@@ -16,7 +16,10 @@ dependencies = [
     "kokoro",
     "coqui-tts[codec]",
     "transformers==4.57.6",  # coqui-tts 0.27.5 needs >=4.57; transformers 5.x removed a symbol it imports
-    "torchaudio",
+    "torchaudio==2.11.0",  # pinned alongside torch/torchcodec below -- installing any one alone lets pip drift the other two out of sync
+    "torch==2.14.0",
+    "torchcodec==0.16.0",
+    "f5-tts",
 ]
 
 [project.optional-dependencies]

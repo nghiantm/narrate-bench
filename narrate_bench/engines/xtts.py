@@ -15,7 +15,7 @@ os.environ.setdefault("COQUI_TOS_AGREED", "1")  # CPML non-commercial use, confi
 from TTS.api import TTS  # noqa: E402
 
 from narrate_bench.engines.base import SynthResult
-from narrate_bench.engines.gpu_guard import acquire, release
+from narrate_bench.engines.gpu_guard import acquire, peak_vram_mb, release, reset_peak_vram
 
 MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 SAMPLE_RATE = 24000
@@ -40,6 +40,7 @@ class XTTSEngine:
 
     def synthesize(self, text: str, out_path: Path) -> SynthResult:
         t0 = time.monotonic()
+        reset_peak_vram()
         try:
             out = self._model.inference(
                 text,
@@ -50,9 +51,9 @@ class XTTSEngine:
             )
             audio = np.asarray(out["wav"], dtype=np.float32)
         except Exception as e:  # per-chunk engine failures must not abort the run
-            return SynthResult(wall_s=time.monotonic() - t0, peak_vram_mb=None, raw_sample_rate=0, error=str(e))
+            return SynthResult(wall_s=time.monotonic() - t0, peak_vram_mb=peak_vram_mb(), raw_sample_rate=0, error=str(e))
         sf.write(str(out_path), audio, SAMPLE_RATE, subtype="PCM_16", format="WAV")
-        return SynthResult(wall_s=time.monotonic() - t0, peak_vram_mb=None, raw_sample_rate=SAMPLE_RATE)
+        return SynthResult(wall_s=time.monotonic() - t0, peak_vram_mb=peak_vram_mb(), raw_sample_rate=SAMPLE_RATE)
 
     def unload(self) -> None:
         del self._model

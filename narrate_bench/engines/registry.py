@@ -50,10 +50,38 @@ def _build_xtts(cfg: "Config", engine_cfg: "EngineCfg"):
     )
 
 
+def _build_f5tts(cfg: "Config", engine_cfg: "EngineCfg"):
+    from narrate_bench.audio.reference_clip import ensure_reference_clip
+    from narrate_bench.engines.f5tts import F5TTSEngine
+
+    ref_clip = ensure_reference_clip(Path(engine_cfg.reference_clip))
+    return F5TTSEngine(
+        voice_id=engine_cfg.voice_id,
+        params=engine_cfg.params,
+        max_chars=engine_cfg.max_chars,
+        reference_clip=ref_clip,
+    )
+
+
+def _build_chatterbox(cfg: "Config", engine_cfg: "EngineCfg"):
+    from narrate_bench.audio.reference_clip import ensure_reference_clip
+    from narrate_bench.engines.chatterbox import ChatterboxEngine
+
+    ref_clip = ensure_reference_clip(Path(engine_cfg.reference_clip))
+    return ChatterboxEngine(
+        voice_id=engine_cfg.voice_id,
+        params=engine_cfg.params,
+        max_chars=engine_cfg.max_chars,
+        reference_clip=ref_clip,
+    )
+
+
 _BUILDERS = {
     "piper": _build_piper,
     "kokoro": _build_kokoro,
     "xtts": _build_xtts,
+    "f5tts": _build_f5tts,
+    "chatterbox": _build_chatterbox,
 }
 
 

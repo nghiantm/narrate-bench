@@ -3,6 +3,7 @@ cache/
 results/
 *.tmp
 .venv/
+.venv-chatterbox/
 venv/
 __pycache__/
 *.egg-info/

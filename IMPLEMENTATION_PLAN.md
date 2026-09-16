@@ -41,7 +41,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 - `kokoro.py` (CPU), `xtts.py` (GPU, fixed reference clip, speaker embedding cached once). Add a GPU model guard in the runner: acquire before load, release after unload.
 - Accept: one chapter each; outputs pass conform; listening spot-check of 5 chunks per engine noted in TASK_LOG; `nvidia-smi` shows one TTS model resident at a time.
 
-### M08 — F5-TTS and Chatterbox `[ ]`
+### M08 — F5-TTS and Chatterbox `[x]`
 - `f5tts.py`, `chatterbox.py` using the same reference clip as XTTS. Record `peak_vram_mb` per chunk via `torch.cuda.max_memory_allocated`. Pin exact model revisions in config and `requirements.lock`.
 - Accept: one chapter each on the 3070 without OOM; outputs pass conform; `engine_error` recorded rather than raised on a deliberately malformed input; spot-check noted in TASK_LOG.
 

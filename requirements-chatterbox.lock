@@ -1,0 +1,19 @@
+# Isolated environment for the Chatterbox engine only -- NOT part of the
+# main venv. chatterbox-tts hard-pins transformers==5.2.0 and numpy<2.0,
+# incompatible with XTTS (needs transformers<5) and the rest of this
+# project (numpy 2.x) in one interpreter. See ARCHITECTURE.md's
+# concurrency section and TASK_LOG.md's M08 entry.
+#
+# Setup:
+#   python3 -m venv .venv-chatterbox
+#   .venv-chatterbox/bin/pip install -r requirements-chatterbox.lock
+#
+# narrate_bench itself is NOT installed here -- chatterbox_worker.py is a
+# standalone script with no narrate_bench imports.
+setuptools<81  # newer setuptools dropped pkg_resources, which chatterbox-tts's perth dependency still imports
+chatterbox-tts==0.1.7
+torch==2.6.0
+torchaudio==2.6.0
+transformers==5.2.0
+numpy==1.26.4
+soundfile==0.14.0

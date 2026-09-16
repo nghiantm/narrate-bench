@@ -99,7 +99,9 @@ CHARS_PER_SECOND = 15.0  # ~150 words/min typical audiobook narration pace
 def _load_manifest(manifest_path: Path) -> pd.DataFrame:
     if manifest_path.exists():
         return pd.read_parquet(manifest_path)
-    return pd.DataFrame(columns=["chunk_id", "engine_id", "synth_path", "wall_s", "audio_dur_s", "status"])
+    return pd.DataFrame(
+        columns=["chunk_id", "engine_id", "synth_path", "wall_s", "peak_vram_mb", "audio_dur_s", "status"]
+    )
 
 
 def _classify(path: Path, text: str) -> tuple[str, float]:
@@ -133,6 +135,7 @@ def _synthesize_chunk(eng, cache: ContentCache, model_revision: str, chunk_id: s
         audio_conform.conform(raw_tmp, tmp_path)
         raw_tmp.unlink(missing_ok=True)
         timing["wall_s"] = result.wall_s
+        timing["peak_vram_mb"] = result.peak_vram_mb
 
     try:
         final_path = cache.write_atomic(key, producer)
@@ -142,6 +145,7 @@ def _synthesize_chunk(eng, cache: ContentCache, model_revision: str, chunk_id: s
             "engine_id": eng.engine_id,
             "synth_path": None,
             "wall_s": None,
+            "peak_vram_mb": None,
             "audio_dur_s": None,
             "status": f"engine_error: {e}",
         }
@@ -152,6 +156,7 @@ def _synthesize_chunk(eng, cache: ContentCache, model_revision: str, chunk_id: s
         "engine_id": eng.engine_id,
         "synth_path": str(final_path),
         "wall_s": timing["wall_s"],
+        "peak_vram_mb": timing["peak_vram_mb"],
         "audio_dur_s": audio_dur_s,
         "status": status,
     }
@@ -206,6 +211,7 @@ def synthesize(
                         "engine_id": eng.engine_id,
                         "synth_path": str(cache.path(key)),
                         "wall_s": None,
+                        "peak_vram_mb": None,  # not recoverable from a cache hit alone
                         "audio_dur_s": audio_dur_s,
                         "status": status,
                     }

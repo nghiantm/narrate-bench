@@ -61,14 +61,14 @@ engines:
   f5tts:
     voice_id: "reference"
     params: {}
-    max_chars: 400  # verify against F5-TTS's own limit in M08 -- shared chunk cap is min() across engines, currently 250 via xtts regardless
+    max_chars: 400  # no hard limit found in the library (unlike XTTS's 250); tested fine at 250-char chunks. Shared chunk cap is min() across engines, currently 250 via xtts regardless
     device: cuda
-    model_revision: "base"  # verify
+    model_revision: "F5TTS_v1_Base"  # confirmed: SWivid/F5-TTS commit 84e5a410d9cead4de2f847e7c9369a6440bdfaca
     reference_clip: "data/reference_clip.wav"
   chatterbox:
     voice_id: "reference"
     params: {}
-    max_chars: 400  # verify against Chatterbox's own limit in M08 -- shared chunk cap is min() across engines, currently 250 via xtts regardless
+    max_chars: 400  # no hard limit found (tolerated even empty-string input without error); shared chunk cap is min() across engines, currently 250 via xtts regardless
     device: cuda
-    model_revision: "main"  # verify
+    model_revision: "main"  # confirmed: ResembleAI/chatterbox commit 5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18
     reference_clip: "data/reference_clip.wav"

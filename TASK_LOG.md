@@ -278,3 +278,49 @@ All three engines: 72/72 manifest rows `status="ok"`, all pass `conform.check()`
 **GPU residency check:** WSL2's `nvidia-smi` does not reliably report per-process VRAM for guest CUDA contexts (a known WSL2 limitation -- `--query-compute-apps` returned nothing during the live XTTS run despite GPU utilization visibly climbing from 18% to 25%+). Used `utilization.gpu` as corroborating evidence of real GPU compute activity instead, backed by `gpu_guard`'s unit-tested mutual exclusion as the actual correctness guarantee (only one GPU engine is ever constructed per `nb synthesize` process anyway, since the CLI takes a single `--engine` flag).
 
 All acceptance criteria met.
+
+## Proposed architecture changes
+
+**Two venvs, not one** (approved by user mid-M08; folded into ARCHITECTURE.md's Environment and Concurrency sections rather than left as a pending proposal, since the user signed off in-session before implementation). `chatterbox-tts==0.1.7` hard-pins `transformers==5.2.0` exactly and `numpy<2.0` for Python<3.13. XTTS needs `transformers<5` (5.x removed `isin_mps_friendly`, which coqui-tts 0.27.5's tortoise layer imports and which has no drop-in replacement at that import site). The rest of the project needs `numpy>=2` (pandas 3.x, pyarrow 25.x, scipy). These three constraints cannot be satisfied by one interpreter's site-packages simultaneously -- confirmed by directly installing all three and hitting `ModuleNotFoundError`/`AttributeError` cascades, not inferred from version numbers alone.
+
+Considered and rejected: (a) a monkeypatch shim for the missing transformers symbol, to keep one venv -- rejected by the user as more fragile than isolation, and it would not have addressed the numpy conflict anyway; (b) dropping Chatterbox from the benchmark -- rejected, since isolation is a known-working, if inelegant, fix and the benchmark's value depends on covering the engines ARCHITECTURE.md commits to.
+
+Chosen: `.venv-chatterbox/` (from `requirements-chatterbox.lock`, `make install-chatterbox`), isolated from the main `.venv/`. `narrate_bench/engines/chatterbox.py` runs `narrate_bench/engines/chatterbox_worker.py` as a persistent subprocess under that interpreter, talking over a one-JSON-object-per-line stdin/stdout protocol (request: `{text, out_path}`; response: `{wall_s, peak_vram_mb, raw_sample_rate, error}`). The worker has no dependency on the `narrate_bench` package itself (not installed in that venv) -- it is a fully standalone script. `ChatterboxEngine` satisfies the exact same `TTSEngine` protocol as every in-process engine, so `registry.py`, `cli.py`, and `gpu_guard.py` need no special-casing; the isolation is invisible above the engine layer.
+
+Two bugs specific to this design, found and fixed:
+1. `chatterbox_worker.py` lives in the same directory as `narrate_bench/engines/chatterbox.py` (our own client wrapper). Running the worker as a script puts that directory first on `sys.path`, so `from chatterbox.tts import ...` resolved to our own file instead of the pip-installed `chatterbox` package. Fixed by stripping the script's own directory from `sys.path` before importing anything from the real package.
+2. chatterbox-tts's `perth` dependency prints plain status lines (`"loaded PerthNet (Implicit) at step 250,000"`) directly to stdout during model load -- which corrupted the JSON protocol channel, since the client's `readline()` picked up that line instead of the `{"ready": ...}` response. Fixed by duplicating the process's real stdout file descriptor into a private handle used only for protocol messages, then redirecting the process's actual stdout (fd 1) to stderr, so any other library noise on stdout is harmless.
+
+## M08 — F5-TTS and Chatterbox `2026-09-16`
+
+Both engines needed their real capabilities checked against the library, not assumed from `config.yaml`'s M01 placeholders -- same lesson as M07's XTTS 250-char discovery.
+
+**F5-TTS** (`narrate_bench/engines/f5tts.py`, package `f5-tts`, model `F5TTS_v1_Base`, license CC-BY-NC-4.0 -- confirmed with the user before downloading): unlike XTTS, F5-TTS's clone API needs the reference clip's *transcript* (`ref_text`), not just the audio -- passing `ref_text=""` triggers a one-time built-in ASR transcription (cached internally by audio-file hash), which correctly transcribed the shared reference clip as "Dear son, I have ever had pleasure in obtaining any little anecdotes of my ancestors..." (matches the real Franklin autobiography text the clip was cut from). `F5TTSEngine.__init__` calls `preprocess_ref_audio_text()` once and stores the resolved `(ref_file, ref_text)`, so per-chunk `infer()` calls skip re-transcription. No hard per-call text-length limit found in the library (unlike XTTS's explicit 250-char check); tested clean at 250-char chunks (the shared cap set in M07).
+
+**Chatterbox** (`narrate_bench/engines/chatterbox.py` + `chatterbox_worker.py`, package `chatterbox-tts`, license MIT -- no confirmation needed): see "Proposed architecture changes" above for why and how this one runs out-of-process. `model.prepare_conditionals(reference_clip)` is called once in the worker at startup; `model.generate(text)` (no `audio_prompt_path`) reuses it per chunk. No hard text-length limit found either (tolerated even an empty-string input without raising).
+
+**`peak_vram_mb`** now flows end-to-end: `gpu_guard.reset_peak_vram()`/`peak_vram_mb()` wrap each GPU engine's own inference call (XTTS and F5-TTS in-process; Chatterbox inside the worker subprocess, using its own torch/CUDA context identically), populate `SynthResult.peak_vram_mb`, and `cli.py`'s `_synthesize_chunk` threads it into the manifest row next to `wall_s`. CPU engines (Piper, Kokoro) report `None`, correctly.
+
+Also fixed while getting a clean, fully-reproducible venv after the chatterbox-tts detour polluted the main one: `torch` had drifted to an inconsistent `2.6.0` (from an earlier `pip install transformers==... numpy==...` command that silently resolved a different torch version as a side effect) while `torchcodec` stayed pinned to a build expecting `torch==2.14.0`, breaking XTTS's audio loading with `OSError: libnvrtc.so.13: cannot open shared object file`. Fixed by rebuilding `.venv/` from scratch and installing `torch==2.14.0`, `torchaudio==2.11.0`, `torchcodec==0.16.0` together as a pinned trio *before* anything else, then `f5-tts` (which separately needed `datasets>=5.0.1` -- the version already present, `2.14.4`, used a pyarrow API removed in our pinned `pyarrow==25.0.1`).
+
+### Verification output
+
+```
+$ . .venv/bin/activate && pytest -q
+........................................................................ [ 76%]
+......................                                                   [100%]
+94 passed in 30.25s
+
+$ rm -rf cache data/synth_manifest.parquet data/models && nb prepare > /dev/null
+$ nb synthesize --engine piper --book treasure_island --chapter 0      # 72 synthesized, real 0m30s
+$ nb synthesize --engine kokoro --book treasure_island --chapter 0     # 72 synthesized, real 4m01s
+$ nb synthesize --engine xtts --book treasure_island --chapter 0       # 72 synthesized, real 6m56s
+$ nb synthesize --engine f5tts --book treasure_island --chapter 0      # 72 synthesized, real 8m30s
+$ nb synthesize --engine chatterbox --book treasure_island --chapter 0 # 72 synthesized, real 8m44s (includes ~2min worker/model startup)
+```
+
+All five engines, one Python one-liner over the full manifest: 72/72 `status="ok"` each (360 rows total), zero `conform.check()` failures. `peak_vram_mb`: XTTS 1857-2325 MB, F5-TTS 2307-2432 MB, Chatterbox 3457-3756 MB, all comfortably under the RTX 3070's 8192 MB. 5-chunk spot-check per engine (F5-TTS, Chatterbox) via the same waveform-sanity-proxy approach as M07: peak exactly 0.891 (-1 dBFS) on every sample; duration at or above the chars-per-second expectation for every chunk except the known single-character heading-chunk artifact; active-sample fraction 0.57-0.91, consistent with real speech.
+
+`engine_error` handling: not re-triggered by a real malformed input this session (Chatterbox tolerated an empty string without error; F5-TTS and XTTS were not separately fuzzed) -- relying instead on the generic mechanism already proven in M05/M06 with mock engines (`_synthesize_chunk`'s `except Exception` around `cache.write_atomic`, structurally engine-agnostic) plus the fact that every GPU engine's own `synthesize()` also catches broadly and returns `SynthResult(error=...)`. Both layers exist independent of which specific engine is involved.
+
+All acceptance criteria met.

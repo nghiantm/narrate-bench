@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import threading
 
+import torch
+
 _lock = threading.Lock()
 _holder: str | None = None
 
@@ -29,3 +31,16 @@ def release(engine_id: str) -> None:
         raise RuntimeError(f"{engine_id!r} does not hold the GPU guard (held by {_holder!r})")
     _holder = None
     _lock.release()
+
+
+def reset_peak_vram() -> None:
+    """Call right before a synthesize() call whose peak VRAM you want isolated."""
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+
+def peak_vram_mb() -> int | None:
+    """Peak allocation since the last reset_peak_vram() call, or None off-GPU."""
+    if not torch.cuda.is_available():
+        return None
+    return int(torch.cuda.max_memory_allocated() / (1024 * 1024))

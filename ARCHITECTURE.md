@@ -30,9 +30,12 @@ narrate_bench/
   engines/
     base.py         TTSEngine Protocol, SynthResult
     piper.py kokoro.py xtts.py f5tts.py chatterbox.py
+    chatterbox_worker.py   standalone subprocess entrypoint, run under .venv-chatterbox (see Environment)
+    gpu_guard.py    acquire()/release()/peak_vram_mb(): one GPU-resident model at a time
     registry.py     name -> engine factory
   audio/
     conform.py      resample/trim/normalize to contract
+    reference_clip.py  shared 10s reference clip for the cloning engines
     slice.py        cut human chapter audio at chunk boundaries
     align.py        WhisperX forced alignment -> word timestamps
   asr/
@@ -44,12 +47,14 @@ narrate_bench/
   analysis/
     stats.py        regressions, bootstrap
     plots.py        chart set
-data/                gitignored: books, librivox mp3, norm text, chunks.parquet
+data/                gitignored: books, librivox mp3, norm text, chunks.parquet, reference_clip.wav
 cache/               gitignored
 results/             results.parquet, human_results.parquet, reports/
 tests/
 config.yaml
-Makefile             `make reproduce` = one short book, Piper only, CPU
+requirements.lock            main venv (.venv/) -- everything except Chatterbox
+requirements-chatterbox.lock isolated venv (.venv-chatterbox/) -- Chatterbox only, see Environment
+Makefile             `make reproduce` = one short book, Piper only, CPU; `make install-chatterbox` sets up .venv-chatterbox/
 ```
 
 ## Data schemas
@@ -95,6 +100,7 @@ class TTSEngine(Protocol):
     params: dict
     max_chars: int
     def synthesize(self, text: str, out_path: Path) -> SynthResult
+    def unload(self) -> None  # GPU engines only; releases the model and the gpu_guard slot
 
 @dataclass
 class SynthResult:
@@ -103,6 +109,8 @@ class SynthResult:
     raw_sample_rate: int
     error: str | None = None
 ```
+
+A `TTSEngine` may run in-process (Piper, Kokoro, XTTS, F5-TTS) or as a client to a persistent worker subprocess in an isolated venv (Chatterbox — see Environment). Either way it satisfies the same protocol; nothing outside `engines/chatterbox.py` and `engines/chatterbox_worker.py` knows the difference.
 
 ```python
 class ContentCache:
@@ -125,7 +133,7 @@ Buckets rotate XS→S→M→L→XS… within each chapter so every bucket appear
 
 ## Pinned models
 
-Whisper large-v3 (faster-whisper); WhisperX `WAV2VEC2_ASR_LARGE_LV60K_960H` aligner; SpeechBrain `spkrec-ecapa-voxceleb`; UTMOS22 strong. Engines (all open-source, local): Piper `en_US-lessac-medium` (CPU); Kokoro v1.0 `af_heart` (CPU); Coqui XTTS v2.0.3 (GPU, fixed 10 s reference clip); F5-TTS base (GPU, same reference clip); Chatterbox (GPU, same reference clip). The three cloning engines share one reference clip so voice-consistency comparisons are fair. Verify exact identifiers and license terms against current releases before pinning in config.
+Whisper large-v3 (faster-whisper); WhisperX `WAV2VEC2_ASR_LARGE_LV60K_960H` aligner; SpeechBrain `spkrec-ecapa-voxceleb`; UTMOS22 strong. Engines (all open-source, local): Piper `en_US-lessac-medium` (CPU); Kokoro v1.0 `af_heart` (CPU); Coqui XTTS v2.0.3 (GPU, fixed 10 s reference clip, CPML non-commercial license); F5-TTS `F5TTS_v1_Base` (GPU, same reference clip, CC-BY-NC-4.0); Chatterbox (GPU, same reference clip, MIT). The three cloning engines share one reference clip so voice-consistency comparisons are fair. Exact identifiers and license terms confirmed against the actual loaded models in M07/M08 (see TASK_LOG.md); `config.yaml` records the confirmed commit/hash for each.
 
 ## Analysis contract
 
@@ -135,8 +143,14 @@ Whisper large-v3 (faster-whisper); WhisperX `WAV2VEC2_ASR_LARGE_LV60K_960H` alig
 
 ## Concurrency
 
-CPU engines (Piper, Kokoro): ProcessPoolExecutor, cores−2 workers. GPU engines (XTTS, F5-TTS, Chatterbox) and Whisper: strictly one model loaded at a time; the runner unloads before switching. Engine exceptions are caught per chunk and recorded as `engine_error`.
+CPU engines (Piper, Kokoro): ProcessPoolExecutor, cores−2 workers. GPU engines (XTTS, F5-TTS, Chatterbox) and Whisper: strictly one model loaded at a time; the runner unloads before switching, enforced by `engines/gpu_guard.py` (`acquire`/`release`, one holder at a time — real teeth arrive with `nb run --all`'s orchestrator in M14; each `nb synthesize` invocation today only ever loads one GPU engine per process anyway). Engine exceptions are caught per chunk and recorded as `engine_error`.
+
+Chatterbox specifically runs **out of process**, as a persistent worker subprocess under its own venv (`.venv-chatterbox/`, launched from `engines/chatterbox.py` via `engines/chatterbox_worker.py`), not merely GPU-model-swapped in place like the others. This is a dependency-isolation measure, not a performance one — see Environment.
 
 ## Environment
 
 Python 3.11, PyTorch 2.x, CUDA 12.x. ≥8 GB VRAM (e.g. RTX 3070) is sufficient provided only one GPU model is loaded at a time — Whisper and the GPU TTS engines must never share the card. If Whisper OOMs on long chunks, set `compute_type="int8_float16"` and record it in `model_versions`. CPU fallback = Whisper `medium` int8 and CPU engines only (record substitution in `model_versions`). Pin in `requirements.lock`.
+
+**Two venvs, not one.** `.venv/` (from `requirements.lock`) covers everything except Chatterbox: Piper, Kokoro, XTTS, F5-TTS, and all later stages (Whisper, SpeechBrain, analysis). Chatterbox hard-pins `transformers==5.2.0` and `numpy<2.0`, incompatible with XTTS (needs `transformers<5`, since 5.x removed a symbol its code imports) and with the rest of this project (`numpy>=2` for pandas/pyarrow/scipy) in one interpreter — a real, upstream, unresolved conflict discovered in M08, not a design preference. `.venv-chatterbox/` (from `requirements-chatterbox.lock`, `make install-chatterbox`) isolates it; `engines/chatterbox.py` talks to `engines/chatterbox_worker.py` running under that interpreter over a one-JSON-object-per-line stdin/stdout protocol, so the rest of the codebase — registry, cli.py, gpu_guard — treats it exactly like any other `TTSEngine`.
+
+**System dependency (not pip-installable):** `ffmpeg` (`sudo apt-get install ffmpeg`) is required by torchaudio's `torchcodec` backend, which XTTS and F5-TTS use to load the reference clip. torch≥2.9 made this the mandatory audio I/O path; there is no pure-pip way around it. `.venv-chatterbox/` does not need this — its older torch/torchaudio pair still has the legacy backend.

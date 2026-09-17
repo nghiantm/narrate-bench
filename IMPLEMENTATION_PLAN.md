@@ -51,7 +51,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 - Download configured chapter MP3s, conform to contract, verify chapter count matches text chapter index (or apply configured merge/split map).
 - Accept: `data/audio/human/{book}/{chapter}.wav` for one book; mismatch produces a clear error naming the chapters.
 
-### M10 — Forced alignment and slicing `[ ]`
+### M10 — Forced alignment and slicing `[x]`
 - `align.py` via WhisperX → word timestamps per chapter. `slice.py` cuts chunk audio using first/last word times ± pad; computes `align_conf` = fraction of chunk words aligned with score >0.5; sets `human_audio=null` if <0.8.
 - Update `chunks.parquet` in place with `human_audio`, `align_conf`.
 - Accept: one book sliced; exclusion rate reported; 30 slices spot-checked by ear and noted in TASK_LOG; pad/threshold tuned if needed.

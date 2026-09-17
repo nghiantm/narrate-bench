@@ -1,0 +1,23 @@
+# Isolated environment for WhisperX (forced alignment, M10) and later
+# Whisper transcription (M11) -- NOT part of the main venv. whisperx pins
+# torch~=2.8.0/torchaudio~=2.8.0, incompatible with the main venv's
+# torch==2.14.0 (needed by XTTS/F5-TTS's torchcodec backend). See
+# ARCHITECTURE.md's Environment section and TASK_LOG.md's M10 entry.
+#
+# Setup:
+#   python3 -m venv .venv-whisperx
+#   .venv-whisperx/bin/pip install -r requirements-whisperx.lock
+#
+# narrate_bench itself is NOT installed here -- align_worker.py is a
+# standalone script with no narrate_bench imports (same pattern as
+# chatterbox_worker.py in .venv-chatterbox/).
+whisperx==3.8.6
+torch==2.8.0
+torchaudio==2.8.0
+torchvision==0.23.0
+torchcodec==0.7.0
+transformers==4.57.6
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+pyannote-audio==4.0.7
+numpy==2.5.3

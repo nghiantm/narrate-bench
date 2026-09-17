@@ -13,8 +13,10 @@ import soundfile as sf
 import typer
 from pydantic import ValidationError
 
+from narrate_bench.audio import align as audio_align
 from narrate_bench.audio import conform as audio_conform
 from narrate_bench.audio import librivox
+from narrate_bench.audio import slice as audio_slice
 from narrate_bench.cache import ContentCache
 from narrate_bench.config import Config, load_config
 from narrate_bench.engines import registry
@@ -297,8 +299,85 @@ def ingest(book: str = typer.Option(..., "--book")) -> None:
 
 
 @app.command()
-def align() -> None:
-    _stub("align")
+def align(
+    book: str = typer.Option(..., "--book"),
+    chapter: int = typer.Option(None, "--chapter"),
+    device: str = typer.Option("cpu", "--device"),
+) -> None:
+    cfg = load_config()
+    chunks_path = cfg.paths.data / "chunks.parquet"
+    if not chunks_path.exists():
+        print("chunks.parquet not found; run `nb prepare` first")
+        raise typer.Exit(1)
+
+    df = pd.read_parquet(chunks_path)
+    book_chunks = df[df["book_id"] == book]
+    if book_chunks.empty:
+        print(f"no chunks found for book={book!r}")
+        raise typer.Exit(1)
+
+    audio_dir = cfg.paths.data / "audio" / "human" / book
+    slices_dir = cfg.paths.data / "audio" / "human_slices" / book
+    cache = ContentCache(cfg.paths.cache)
+
+    chapter_indices = sorted(book_chunks["chapter_idx"].unique().tolist())
+    if chapter is not None:
+        chapter_indices = [c for c in chapter_indices if c == chapter]
+
+    align_confs: dict[str, float] = {}
+    human_audios: dict[str, str | None] = {}
+
+    with audio_align.Aligner(device=device) as aligner:
+        for chapter_idx in chapter_indices:
+            chapter_audio = audio_dir / f"{chapter_idx}.wav"
+            if not chapter_audio.exists():
+                print(f"  chapter {chapter_idx}: no ingested audio, skipping (run `nb ingest --book {book}` first)")
+                continue
+
+            chapter_chunks = book_chunks[book_chunks["chapter_idx"] == chapter_idx].sort_values("position_index")
+            chunk_ids = chapter_chunks["chunk_id"].tolist()
+
+            cache_key = cache.key(
+                stage="align",
+                engine_id="",
+                voice_id="",
+                params={},
+                model_version=audio_align.ALIGN_MODEL_NAME,
+                chunk_id=f"{book}:{chapter_idx}",
+            )
+            if cache.has(cache_key):
+                segments = json.loads(cache.path(cache_key).read_text())
+            else:
+                chunk_dicts = [
+                    {"text": t, "char_len": int(cl)}
+                    for t, cl in zip(chapter_chunks["text"], chapter_chunks["char_len"])
+                ]
+                segments = aligner.align_chapter(chapter_audio, chunk_dicts)
+                cache.write_atomic(cache_key, lambda p, s=segments: p.write_text(json.dumps(s)))
+
+            n_excluded = 0
+            for chunk_id, seg in zip(chunk_ids, segments):
+                out_path = slices_dir / f"{chunk_id}.wav"
+                conf, human_audio = audio_slice.slice_chunk(chapter_audio, seg["words"], out_path)
+                align_confs[chunk_id] = conf
+                human_audios[chunk_id] = human_audio
+                if human_audio is None:
+                    n_excluded += 1
+
+            print(
+                f"  chapter {chapter_idx}: {len(chunk_ids)} chunks, "
+                f"{n_excluded} excluded (align_conf < {audio_slice.MIN_ALIGN_CONF})"
+            )
+
+    mask = df["chunk_id"].isin(align_confs)
+    df.loc[mask, "align_conf"] = df.loc[mask, "chunk_id"].map(align_confs)
+    df.loc[mask, "human_audio"] = df.loc[mask, "chunk_id"].map(human_audios)
+    df.to_parquet(chunks_path, index=False)
+
+    n_total = len(align_confs)
+    n_excluded_total = sum(1 for v in human_audios.values() if v is None)
+    pct = (n_excluded_total / n_total * 100) if n_total else 0.0
+    print(f"{book}: {n_total} chunks aligned, {n_excluded_total} excluded ({pct:.1f}%)")
 
 
 @app.command()

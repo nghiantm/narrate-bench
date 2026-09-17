@@ -36,8 +36,10 @@ narrate_bench/
   audio/
     conform.py      resample/trim/normalize to contract
     reference_clip.py  shared 10s reference clip for the cloning engines
-    slice.py        cut human chapter audio at chunk boundaries
-    align.py        WhisperX forced alignment -> word timestamps
+    librivox.py     LibriVox section listing (Track C human baseline)
+    align.py        WhisperX forced alignment -> word timestamps (client)
+    align_worker.py standalone subprocess entrypoint, run under .venv-whisperx (see Environment)
+    slice.py        cut human chapter audio at chunk boundaries using align.py's word timestamps
   asr/
     whisper.py      transcribe(path) -> hypothesis str
     score.py        jiwer WER/CER/sub/ins/del with EnglishTextNormalizer
@@ -52,9 +54,10 @@ cache/               gitignored
 results/             results.parquet, human_results.parquet, reports/
 tests/
 config.yaml
-requirements.lock            main venv (.venv/) -- everything except Chatterbox
+requirements.lock            main venv (.venv/) -- everything except Chatterbox and WhisperX
 requirements-chatterbox.lock isolated venv (.venv-chatterbox/) -- Chatterbox only, see Environment
-Makefile             `make reproduce` = one short book, Piper only, CPU; `make install-chatterbox` sets up .venv-chatterbox/
+requirements-whisperx.lock   isolated venv (.venv-whisperx/) -- WhisperX (alignment, M10; transcription, M11), see Environment
+Makefile             `make reproduce` = one short book, Piper only, CPU; `make install-chatterbox` / `make install-whisperx` set up their venvs
 ```
 
 ## Data schemas
@@ -151,6 +154,11 @@ Chatterbox specifically runs **out of process**, as a persistent worker subproce
 
 Python 3.11, PyTorch 2.x, CUDA 12.x. ≥8 GB VRAM (e.g. RTX 3070) is sufficient provided only one GPU model is loaded at a time — Whisper and the GPU TTS engines must never share the card. If Whisper OOMs on long chunks, set `compute_type="int8_float16"` and record it in `model_versions`. CPU fallback = Whisper `medium` int8 and CPU engines only (record substitution in `model_versions`). Pin in `requirements.lock`.
 
-**Two venvs, not one.** `.venv/` (from `requirements.lock`) covers everything except Chatterbox: Piper, Kokoro, XTTS, F5-TTS, and all later stages (Whisper, SpeechBrain, analysis). Chatterbox hard-pins `transformers==5.2.0` and `numpy<2.0`, incompatible with XTTS (needs `transformers<5`, since 5.x removed a symbol its code imports) and with the rest of this project (`numpy>=2` for pandas/pyarrow/scipy) in one interpreter — a real, upstream, unresolved conflict discovered in M08, not a design preference. `.venv-chatterbox/` (from `requirements-chatterbox.lock`, `make install-chatterbox`) isolates it; `engines/chatterbox.py` talks to `engines/chatterbox_worker.py` running under that interpreter over a one-JSON-object-per-line stdin/stdout protocol, so the rest of the codebase — registry, cli.py, gpu_guard — treats it exactly like any other `TTSEngine`.
+**Three venvs, not one.** `.venv/` (from `requirements.lock`) covers Piper, Kokoro, XTTS, F5-TTS, text/audio prep, and analysis. Chatterbox and WhisperX each need their own isolated venv because their pinned dependencies conflict with `.venv/`'s and with each other:
 
-**System dependency (not pip-installable):** `ffmpeg` (`sudo apt-get install ffmpeg`) is required by torchaudio's `torchcodec` backend, which XTTS and F5-TTS use to load the reference clip. torch≥2.9 made this the mandatory audio I/O path; there is no pure-pip way around it. `.venv-chatterbox/` does not need this — its older torch/torchaudio pair still has the legacy backend.
+- Chatterbox hard-pins `transformers==5.2.0` and `numpy<2.0`, incompatible with XTTS (needs `transformers<5`, since 5.x removed a symbol its code imports) and with the rest of this project (`numpy>=2` for pandas/pyarrow/scipy) — a real, upstream, unresolved conflict discovered in M08, not a design preference. `.venv-chatterbox/` (from `requirements-chatterbox.lock`, `make install-chatterbox`) isolates it.
+- WhisperX pins `torch~=2.8.0`/`torchaudio~=2.8.0`, incompatible with `.venv/`'s `torch==2.14.0` (needed by XTTS/F5-TTS's torchcodec audio backend). `.venv-whisperx/` (from `requirements-whisperx.lock`, `make install-whisperx`) isolates it — used for forced alignment (M10) and will be reused for Whisper transcription (M11).
+
+Both follow the same shape: `engines/chatterbox.py` / `audio/align.py` (in `.venv/`) talk to `engines/chatterbox_worker.py` / `audio/align_worker.py` (standalone scripts, no `narrate_bench` import, run under the isolated interpreter) over a one-JSON-object-per-line stdin/stdout protocol. The rest of the codebase — registry, cli.py, gpu_guard — never needs to know an engine or stage is out-of-process.
+
+**System dependency (not pip-installable):** `ffmpeg` (`sudo apt-get install ffmpeg`) is required by torchaudio's `torchcodec` backend, which XTTS and F5-TTS use to load the reference clip. torch≥2.9 made this the mandatory audio I/O path; there is no pure-pip way around it. `.venv-chatterbox/` and `.venv-whisperx/` don't need this — their older torch/torchaudio pairs still have the legacy backend.

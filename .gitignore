@@ -4,6 +4,7 @@ results/
 *.tmp
 .venv/
 .venv-chatterbox/
+.venv-whisperx/
 venv/
 __pycache__/
 *.egg-info/

@@ -324,3 +324,49 @@ All five engines, one Python one-liner over the full manifest: 72/72 `status="ok
 `engine_error` handling: not re-triggered by a real malformed input this session (Chatterbox tolerated an empty string without error; F5-TTS and XTTS were not separately fuzzed) -- relying instead on the generic mechanism already proven in M05/M06 with mock engines (`_synthesize_chunk`'s `except Exception` around `cache.write_atomic`, structurally engine-agnostic) plus the fact that every GPU engine's own `synthesize()` also catches broadly and returns `SynthResult(error=...)`. Both layers exist independent of which specific engine is involved.
 
 All acceptance criteria met.
+
+### Post-M08 checkpoint: full-book synthesis (user-directed, not a milestone)
+
+Before starting Track C, the user asked for a full-book synthesis run across all 5 engines against `treasure_island` (2303 chunks, the smallest book) as an extra checkpoint. Per-chunk rates measured in M07/M08 put only Piper safely under an hour for a full book (~10 min); Kokoro (~87 min), XTTS (~2.5 hr), F5-TTS (~4 hr), and Chatterbox (~3.4 hr) each exceed it, so these were launched as backgroundable jobs rather than run synchronously. Piper's full run completed in-session: **2299/2300 rows `status="ok"`, one real `engine_error`** (chunk `b1a1a0e18e77d57f`, text `"` -- a bare quote-mark-only chunk, a pysbd segmentation artifact around dialogue -- failed with `# channels not specified`, correctly caught and recorded rather than aborting the run; concrete real-world confirmation of the per-chunk failure handling ARCHITECTURE.md's non-negotiable 6 requires). Zero `conform.check()` failures on the rest. Total audio: 328 minutes.
+
+Kokoro (CPU) and XTTS (GPU) were launched to run concurrently -- CPU and GPU don't contend. F5-TTS and Chatterbox were deliberately *not* launched alongside XTTS: all three are GPU engines sharing the RTX 3070's 8 GB, and ARCHITECTURE.md's concurrency section requires one GPU model resident at a time; running them concurrently as separate processes risks VRAM contention or OOM, since `gpu_guard`'s in-process lock has no reach across separate `nb synthesize` invocations (a known, documented gap -- see M07's TASK_LOG entry -- not fully closed until M14's orchestrator). Per explicit user direction mid-checkpoint, only one GPU engine (XTTS) runs at a time for this checkpoint; F5-TTS and Chatterbox were not queued to run after it.
+
+Also discovered during this checkpoint, relevant to M09: `chunk_id = sha256(book_id + text)[:16]` (ARCHITECTURE.md's own schema) means chunks with identical text collapse to the same `chunk_id` regardless of position -- e.g. three separate isolated `"` chunks at different points in the book all hash to the same id and share one cache entry/synthesis. This is the specified design working as intended (content-addressed caching, no wasted resynthesis of identical text), not a bug; it just means a book's total *chunk rows* can slightly exceed its total *unique synthesized outputs*.
+
+## M09 — LibriVox ingest `2026-09-16`
+
+**`config.yaml` had more wrong placeholders**, found the same way M03 found wrong `gutenberg_id`/`chapter_regex` values -- checked against the real LibriVox API rather than trusted: `treasure_island`'s URL referenced a "version-4" recording that doesn't exist; `sherlock_holmes`'s URL had an incorrect "-by-arthur-conan-doyle" suffix; `franklin_autobiography`'s URL had a typo ("autobiography" vs the real "autobigraphy", LibriVox's own typo carried into their slug). Added a `librivox_id: int` field to `Book` (`config.py`) since the ingest code needs the numeric LibriVox book id to query the API directly -- `librivox_url` is now purely a human-readable citation link, not used programmatically.
+
+**Narrator-count finding:** checked all 5 books' actual reader counts via the LibriVox API (not assumed). Only `franklin_autobiography` (id 1143, already used for the M07 reference clip) has a true single-narrator recording. The other 4 only have multi-reader recordings (11-13 different readers each) -- an apparent "solo" alternative existed for Pride and Prejudice (id 22765) and Sherlock Holmes (id 22681) but both are empty catalog stubs (`totaltimesecs: 0`, no `listen_url` on any section) with no real audio. Concluded this doesn't block anything: each LibriVox *section* is read by one consistent narrator throughout (readers are assigned per-section, not mixed mid-chapter), which is all the WER-floor scoring in Track D actually needs. The one place whole-book narrator consistency matters is M13's planned "human spk_sim_first median >0.7 (sanity: same narrator)" check -- noted for M13 to scope that check to within-section (or to `franklin_autobiography` specifically as the canary) rather than assume it holds book-wide for the other 4. No book substitutions made.
+
+`narrate_bench/audio/librivox.py`: `fetch_sections(librivox_id)` hits the LibriVox API and returns the section list (number, title, `listen_url`, readers), sorted by section number.
+
+`nb ingest --book <id>` (new CLI command, `cli.py`): fetches the section list, compares section count to the book's `chapters.json` chapter count. If they match and no `chapter_map` is configured, sections map 1:1 (`chapter_idx = section_number - 1`). If they don't match and no `chapter_map` is configured, exits with a clear error naming the exact section numbers and chapter count, and telling the user which config key to add -- never a silent partial result. If a `chapter_map` *is* configured (`Book.chapter_map`, already in the schema from M01), it's used directly; sections absent from the map (e.g. a LibriVox "Introduction" or "Appendix" with no text-chapter counterpart) are skipped. Each mapped section is downloaded once (cached via `ContentCache`, same fetch-once pattern as `nb prepare`'s Gutenberg download) and conformed to the audio contract via the existing `audio.conform()` from M05 -- no new conform logic needed. Output: `data/audio/human/{book_id}/{chapter_idx}.wav`.
+
+`franklin_autobiography` is the clean 1:1 case after skipping its "Introduction" (section 0) and "Appendix" (section 20): sections 1-19 map directly to chapters 0-18, encoded as an explicit `chapter_map` in `config.yaml` (19 entries -- simple enough to hand-write once real API data was in hand, so no new config schema shape needed beyond what M01 already had). `treasure_island` (26 sections, 34 text chapters -- LibriVox groups multiple chapters per section, e.g. "Chapters 1-2" in one file) demonstrates the mismatch-error path, deliberately left unconfigured since only one book needs to fully succeed per this milestone's acceptance criteria; building out `chapter_map`s for the other 4 books is deferred to whenever their human baselines are actually needed.
+
+`tests/test_ingest.py`: mocked `librivox.fetch_sections` and `audio_conform.conform` (no real network calls) prove the chapter_map path writes correctly-named per-chapter files, and that a section/chapter-count mismatch without a configured map raises `typer.Exit` rather than silently proceeding.
+
+### Verification output
+
+```
+$ . .venv/bin/activate && pytest -q
+........................................................................ [ 75%]
+........................                                                 [100%]
+96 passed in 49.68s
+
+$ nb ingest --book franklin_autobiography
+franklin_autobiography: 19 sections ingested to data/audio/human/franklin_autobiography
+
+$ python3 -c "... conform.check() over all 19 files ..."
+19 files
+conform.check() failures: 0
+total duration (min): 413.51  # ~6.9 hours
+
+$ nb ingest --book treasure_island   # deliberate mismatch, no chapter_map configured
+treasure_island: 26 LibriVox sections ['1', '2', ..., '26'] != 34 text chapters, and no chapter_map is
+configured for this book. Add books.treasure_island.chapter_map to config.yaml mapping section_number -> chapter_idx.
+exit=1
+```
+
+All acceptance criteria met: `data/audio/human/franklin_autobiography/{0..18}.wav` exist, all pass `conform.check()`; the mismatch case produces a clear, actionable error naming the exact counts and involved section numbers rather than a silent partial result.

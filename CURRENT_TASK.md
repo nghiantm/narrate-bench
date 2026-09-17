@@ -4,33 +4,35 @@ Read ARCHITECTURE.md first. Work only on the milestone below. When its acceptanc
 
 ---
 
-## Active milestone: M09 — LibriVox ingest
+## Active milestone: M10 — Forced alignment and slicing
 
 ### Goal
-Download the human-narrated LibriVox audio for each book, conform it to the audio contract, and verify chapter counts match the text chapter index built in M03 — the human baseline Track D's scoring will compare synthetic engines against.
+Turn each ingested human chapter WAV (M09) into per-chunk human audio slices, so Track D can compute a WER floor from real narration for every chunk, not just chapter-level audio.
 
 ### Scope
-1. Verify each of the 5 books' `librivox_url` in `config.yaml` actually points to a real, single-narrator LibriVox recording, the same way M03 had to fix wrong `gutenberg_id`/`chapter_regex` values and M07 had to verify a LibriVox book's narrator count before using it as the reference-clip source. Use the LibriVox API (`https://librivox.org/api/feed/audiobooks/?...`) to confirm section list, per-section narrator(s), and per-section MP3 URLs for each configured book — do not trust the M01 placeholder URLs. Note: `treasure_island`'s configured URL includes "version-4" — check whether that specific version exists and is single-narrator, or find the one that is (same due diligence as the Franklin autobiography check in M07, which found id 1143 was the clean single-narrator one).
-2. Download each book's chapter-level MP3s (or section MP3s, if LibriVox's section boundaries don't align 1:1 with the text chapter index — handle the mismatch via a configured merge/split map per the milestone's own acceptance criterion, not by silently guessing).
-3. Conform each to the audio contract via `audio.conform()` (16 kHz mono PCM16, etc. — same function M05 built, reused here rather than duplicated).
-4. Verify chapter count matches `data/text/{book_id}.chapters.json`'s chapter count; on mismatch, raise a clear error naming which chapters don't line up (not a silent skip).
-5. Write `data/audio/human/{book_id}/{chapter_idx}.wav` (or similar naming — match whatever `chapters.json` uses for chapter identity, likely 0-based `chapter_idx`).
-6. Use `ContentCache` for the raw MP3 download step (same pattern as `nb prepare`'s Gutenberg fetch caching), since these are large files and re-downloading on every rerun would be wasteful and slow.
+1. Check WhisperX's actual package/install situation before assuming it just works — it has its own dependency chain (whisper, pyannote-audio for alignment, ctranslate2) that may collide with the main venv's pinned torch/transformers the same way XTTS and Chatterbox did in M07/M08. Verify early; if it needs its own isolated venv (same pattern as `.venv-chatterbox/`), set that up rather than fighting a conflict blind.
+2. `narrate_bench/audio/align.py`: `align(wav_path, text) -> list[WordTiming]` (start_s, end_s, word, score) via WhisperX forced alignment, one call per ingested chapter WAV against that chapter's normalized text (from `data/text/{book}.norm.txt` + `chapters.json`'s char offsets — the same normalized text `nb prepare` already produced, not the raw human transcript, since alignment needs the text to score against).
+3. `narrate_bench/audio/slice.py`: for each chunk belonging to an aligned chapter, find its first/last word's timestamps (matching the chunk's text span within the chapter), cut `[first_word_start - pad, last_word_end + pad]` from the chapter WAV, write the slice, run it through `audio.conform()` (M05) so it meets the same contract as synthetic audio. Compute `align_conf` = fraction of the chunk's words that aligned with score > 0.5. Set `human_audio = null` when `align_conf < 0.8` (per ARCHITECTURE.md's schema) rather than writing a low-confidence slice.
+4. Update `data/chunks.parquet` in place with the new `human_audio` (path or null) and `align_conf` columns for every chunk in the aligned book(s).
+5. Wire into a CLI command (`nb align --book <id>`, filling in the currently-stubbed `align` command in `cli.py`).
+6. Cache the alignment step via `ContentCache` (keyed by book/chapter, not per-chunk — alignment runs once per chapter, slicing reads from that cached result) so a rerun doesn't redo WhisperX inference.
 
 ### Out of scope
-Forced alignment / chunk-level slicing (M10). Whisper transcription of human audio (M11). Full 5-book ingest is not required by this milestone's acceptance criterion — one book is enough to prove the pipeline, though there's no reason not to do all 5 if it's cheap once the mechanism works.
+Whisper transcription of synthetic or human audio for WER (M11). Running alignment on all 5 books unattended (see below — this is the "more than an hour" case).
 
 ### Acceptance criteria
-- `data/audio/human/{book}/{chapter}.wav` exists for at least one full book, every file passing `conform.check()`.
-- A deliberately mismatched chapter count (or a real one, if one of the 5 books turns out to have a mismatch) produces a clear error naming the specific chapters involved, not a silent partial result.
+- One book (use `franklin_autobiography`, already ingested in M09) fully sliced: every one of its chunks gets `human_audio`/`align_conf` written to `chunks.parquet`.
+- Exclusion rate (fraction with `align_conf < 0.8`, `human_audio = null`) reported in TASK_LOG.
+- 30 slices spot-checked — since I can't literally listen, use the same waveform-sanity-proxy approach from M07/M08 (peak, active-sample fraction, duration vs. expected) plus, ideally, a text/duration sanity cross-check (slice duration roughly matching the chunk's char count at a narration pace) — noted in TASK_LOG.
+- Pad and the 0.5/0.8 confidence thresholds tuned if the first attempt produces an implausible exclusion rate (e.g. >30% excluded on a clean single-narrator book like Franklin's should be surprising — investigate before accepting).
 - `pytest -q` passes, including all prior milestone tests.
 
 ### Verification commands
 ```
 . .venv/bin/activate
 pytest -q
-nb align --book <chosen_book_id>   # or whatever command name this milestone ends up wiring — adjust to match cli.py's actual stage command, may need a new command distinct from the existing `align` stub if that name is reserved for M10's forced-alignment stage
+nb align --book franklin_autobiography --chapter 0   # or equivalent one-chapter scoping if the CLI ends up needing it, to prove correctness cheaply first
 ```
 
-### On completion
-Append the TASK_LOG entry with exact `pytest -q` output and the chapter-count verification evidence, mark M09 `[x]` in IMPLEMENTATION_PLAN.md, then replace this file's active milestone with M10 — Forced alignment and slicing (copy its scope and acceptance criteria from IMPLEMENTATION_PLAN.md and expand into the same sections as above). M10 is one of the three milestones (M10, M11, M14) the user's own instructions flag as likely exceeding an hour of machine time for a full run — set it up and run it on one chapter, then report the command to launch the full run rather than running it unattended.
+### On completion — IMPORTANT, this milestone is flagged as likely exceeding an hour of machine time
+Per standing instructions: set up the full pipeline, prove it correct on one chapter (or one short book), then **stop and report the exact command to launch the full 5-book (or however many are ingested) run** rather than running it unattended. Append the TASK_LOG entry with the one-chapter/one-book verification evidence, mark M10 `[x]` in IMPLEMENTATION_PLAN.md only once that scoped run's acceptance criteria pass, then replace this file's active milestone with M11 — Whisper transcription (copy its scope and acceptance criteria from IMPLEMENTATION_PLAN.md and expand into the same sections as above). M11 is also flagged as a likely-long-run milestone — same approach applies there.

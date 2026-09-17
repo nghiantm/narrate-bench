@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
+import urllib.request
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +14,7 @@ import typer
 from pydantic import ValidationError
 
 from narrate_bench.audio import conform as audio_conform
+from narrate_bench.audio import librivox
 from narrate_bench.cache import ContentCache
 from narrate_bench.config import Config, load_config
 from narrate_bench.engines import registry
@@ -226,6 +229,71 @@ def synthesize(
         manifest.to_parquet(manifest_path, index=False)
 
     print(f"{book}: {n_synth} synthesized, {n_cached} already cached, {len(df)} total chunks")
+
+
+@app.command()
+def ingest(book: str = typer.Option(..., "--book")) -> None:
+    cfg = load_config()
+    book_cfg = next((b for b in cfg.books if b.book_id == book), None)
+    if book_cfg is None:
+        print(f"unknown book {book!r}")
+        raise typer.Exit(1)
+
+    chapters_path = cfg.paths.data / "text" / f"{book}.chapters.json"
+    if not chapters_path.exists():
+        print(f"{chapters_path} not found; run `nb prepare` first")
+        raise typer.Exit(1)
+    n_chapters = len(json.loads(chapters_path.read_text()))
+
+    sections = librivox.fetch_sections(book_cfg.librivox_id)
+    chapter_map = book_cfg.chapter_map
+
+    if chapter_map is None and len(sections) != n_chapters:
+        section_numbers = [s["section_number"] for s in sections]
+        print(
+            f"{book}: {len(sections)} LibriVox sections {section_numbers} != "
+            f"{n_chapters} text chapters, and no chapter_map is configured for this book. "
+            f"Add books.{book}.chapter_map to config.yaml mapping section_number -> chapter_idx."
+        )
+        raise typer.Exit(1)
+
+    cache = ContentCache(cfg.paths.cache)
+    out_dir = cfg.paths.data / "audio" / "human" / book
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    n_ingested = 0
+    for section in sections:
+        section_num = section["section_number"]
+        if chapter_map is not None:
+            if section_num not in chapter_map:
+                continue
+            chapter_idx = int(chapter_map[section_num])
+        else:
+            chapter_idx = int(section_num) - 1
+
+        key = cache.key(
+            stage="fetch_librivox",
+            engine_id="",
+            voice_id="",
+            params={},
+            model_version="1",
+            chunk_id=f"{book_cfg.librivox_id}:{section_num}",
+        )
+        if not cache.has(key):
+            listen_url = section["listen_url"]
+
+            def producer(tmp_path: Path, url: str = listen_url) -> None:
+                req = urllib.request.Request(url, headers={"User-Agent": "narrate-bench/0.1"})
+                with urllib.request.urlopen(req, timeout=180) as resp, open(tmp_path, "wb") as f:
+                    shutil.copyfileobj(resp, f)
+
+            cache.write_atomic(key, producer)
+
+        out_path = out_dir / f"{chapter_idx}.wav"
+        audio_conform.conform(cache.path(key), out_path)
+        n_ingested += 1
+
+    print(f"{book}: {n_ingested} sections ingested to {out_dir}")
 
 
 @app.command()

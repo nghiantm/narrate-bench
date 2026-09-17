@@ -29,6 +29,7 @@ def _make_cfg(tmp_path):
     book = Book(
         book_id="example",
         gutenberg_id=99999,
+        librivox_id=99999,
         librivox_url="https://example.com",
         chapter_regex=r"^CHAPTER [IVXLC]+\.?$",
     )

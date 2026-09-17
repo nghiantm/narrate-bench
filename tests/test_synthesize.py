@@ -27,7 +27,7 @@ class CountingEngine:
 
 
 def _make_cfg(tmp_path):
-    book = Book(book_id="b", gutenberg_id=1, librivox_url="https://example.com", chapter_regex="x")
+    book = Book(book_id="b", gutenberg_id=1, librivox_id=1, librivox_url="https://example.com", chapter_regex="x")
     engine_cfg = EngineCfg(voice_id="v1", max_chars=1000, device="cpu", model_revision="rev1")
     cfg = Config(
         books=[book],

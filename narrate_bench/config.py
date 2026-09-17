@@ -14,6 +14,7 @@ class Book(BaseModel):
 
     book_id: str
     gutenberg_id: int
+    librivox_id: int
     librivox_url: str
     chapter_regex: str
     chapter_map: dict[str, str] | None = None

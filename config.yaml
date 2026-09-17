@@ -19,22 +19,49 @@ sample_plan:
 books:
   - book_id: pride_and_prejudice
     gutenberg_id: 42671  # 3-vol plain edition; 1342 is illustration-only chapter breaks, unusable for regex splitting
+    librivox_id: 253  # confirmed via LibriVox API in M09; 13 readers (one per section, not single-narrator across the whole book)
     librivox_url: "https://librivox.org/pride-and-prejudice-by-jane-austen/"
     chapter_regex: "^CHAPTER [IVXLC]+\\.?$"
   - book_id: treasure_island
     gutenberg_id: 120
-    librivox_url: "https://librivox.org/treasure-island-version-4-by-robert-louis-stevenson/"
+    librivox_id: 449  # confirmed via LibriVox API in M09; original "version-4" URL doesn't exist. 13 readers (one per section)
+    librivox_url: "https://librivox.org/treasure-island-by-robert-louis-stevenson/"
     chapter_regex: "^[IVXLC]+$"
   - book_id: sherlock_holmes
     gutenberg_id: 1661
-    librivox_url: "https://librivox.org/the-adventures-of-sherlock-holmes-by-arthur-conan-doyle/"
+    librivox_id: 314  # confirmed via LibriVox API in M09; original URL had a wrong "-by-arthur-conan-doyle" suffix. 11 readers (one per section)
+    librivox_url: "https://librivox.org/the-adventures-of-sherlock-holmes/"
     chapter_regex: "^[IVXLC]+\\. .+$"
   - book_id: franklin_autobiography
     gutenberg_id: 20203
-    librivox_url: "https://librivox.org/the-autobiography-of-benjamin-franklin/"
+    librivox_id: 1143  # confirmed via LibriVox API in M07/M09; single narrator (Gary Gilberd) -- also the reference_clip.wav source
+    librivox_url: "https://librivox.org/the-autobigraphy-of-benjamin-franklin-ed-by-frank-woodworth-pine/"
     chapter_regex: "^[IVXLC]+$"
+    # section "0" (Introduction) and "20" (Appendix) have no text-chapter counterpart, so they're
+    # simply absent from this map and skipped on ingest; sections "1"-"19" map straight to chapters 0-18.
+    chapter_map:
+      "1": "0"
+      "2": "1"
+      "3": "2"
+      "4": "3"
+      "5": "4"
+      "6": "5"
+      "7": "6"
+      "8": "7"
+      "9": "8"
+      "10": "9"
+      "11": "10"
+      "12": "11"
+      "13": "12"
+      "14": "13"
+      "15": "14"
+      "16": "15"
+      "17": "16"
+      "18": "17"
+      "19": "18"
   - book_id: anne_of_green_gables
     gutenberg_id: 45
+    librivox_id: 146  # confirmed via LibriVox API in M09; 12 readers (one per section)
     librivox_url: "https://librivox.org/anne-of-green-gables-by-lucy-maud-montgomery/"
     chapter_regex: "^CHAPTER [IVXLC]+\\..*$"
 

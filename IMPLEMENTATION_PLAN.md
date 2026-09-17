@@ -47,7 +47,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 
 ## Track C — Human baseline
 
-### M09 — LibriVox ingest `[ ]`
+### M09 — LibriVox ingest `[x]`
 - Download configured chapter MP3s, conform to contract, verify chapter count matches text chapter index (or apply configured merge/split map).
 - Accept: `data/audio/human/{book}/{chapter}.wav` for one book; mismatch produces a clear error naming the chapters.
 
